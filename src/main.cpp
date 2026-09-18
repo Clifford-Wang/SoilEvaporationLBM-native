@@ -214,7 +214,7 @@ static std::string time_tag(){
 #endif
     std::ostringstream o;o<<std::put_time(&tm,"%Y%m%d-%H%M%S");return o.str();
 }
-static void archive_dir_if_needed(const fs::path& dir,const std::string& sig,bool force){
+static void archive_dir_if_needed(const fs::path& dir,const std::string& sig,bool force,bool verbose){
     if(!fs::exists(dir))return;
     fs::path sf=dir/"run_signature.txt";
     bool same=false;if(fs::exists(sf)){std::ifstream in(sf);std::string old;std::getline(in,old);same=(trim(old)==sig);}
@@ -222,7 +222,7 @@ static void archive_dir_if_needed(const fs::path& dir,const std::string& sig,boo
     fs::path dst=dir;dst+=std::string("__archive_")+(force?"force_":"config_")+time_tag();
     int k=1;while(fs::exists(dst)){dst=dir;dst+=std::string("__archive_")+time_tag()+"_"+std::to_string(k++);}
     fs::rename(dir,dst);
-    std::cout<<"[Archive] "<<path_utf8(dst)<<"\n";
+    if(verbose) std::cout<<"[Archive] "<<path_utf8(dst)<<"\n";
 }
 static void write_signature(const fs::path& dir,const std::string& sig){fs::create_directories(dir);std::ofstream(dir/"run_signature.txt")<<sig<<"\n";}
 
@@ -243,6 +243,10 @@ int main(int argc,char** argv){
         const int vtk_interval=ini.geti("RUN","vtk_interval",10000),checkpoint_interval=ini.geti("RUN","checkpoint_interval",100000),keep_ck=ini.geti("RUN","keep_checkpoints",2),save_vtk=ini.geti("RUN","save_vtk",1);
         const double memfrac=ini.getd("RUN","device_memory_fraction",0.86),wait_seconds=ini.getd("RUN","wait_seconds",3.0);
         const int force=ini.geti("CONTROL","force",0),dry_run=ini.geti("CONTROL","dry_run",0);
+        std::string console_mode=ini.get("CONTROL","console_mode","minimal");
+        std::transform(console_mode.begin(),console_mode.end(),console_mode.begin(),[](unsigned char ch){return (char)std::tolower(ch);});
+        if(console_mode!="full"&&console_mode!="minimal")throw std::runtime_error("CONTROL.console_mode must be full or minimal.");
+        const bool verbose=(console_mode=="full");
 
         auto geo_root=resolve_path(cfg,ini.get("PATHS","geometry_root"));
         auto phase_file=resolve_path(cfg,ini.get("PATHS","phase_file"));
@@ -253,12 +257,14 @@ int main(int argc,char** argv){
         auto phase=load_doubles(phase_file,expected);uint64_t phase_hash=fnv_file(phase_file);
         fs::create_directories(output_root);
 
-        std::cout<<"####################################################################################################\n";
-        std::cout<<"SoilEvaporationLBM Native CUDA | no Python/Taichi runtime\n";
-        std::cout<<"Config        = "<<path_utf8(cfg)<<"\nGeometry root = "<<path_utf8(geo_root)<<"\nPhase file    = "<<path_utf8(phase_file)<<"\nOutput root   = "<<path_utf8(output_root)<<"\n";
-        std::cout<<"Samples       = "<<cases.size()<<"\nG_ads list    = [";for(size_t i=0;i<gads_values.size();++i){if(i)std::cout<<",";std::cout<<gads_values[i];}std::cout<<"]\n";
-        std::cout<<"Total jobs    = "<<cases.size()*gads_values.size()<<"\n";
-        std::cout<<"####################################################################################################\n";
+        if(verbose){
+            std::cout<<"####################################################################################################\n";
+            std::cout<<"SoilEvaporationLBM Native CUDA | no Python/Taichi runtime\n";
+            std::cout<<"Config        = "<<path_utf8(cfg)<<"\nGeometry root = "<<path_utf8(geo_root)<<"\nPhase file    = "<<path_utf8(phase_file)<<"\nOutput root   = "<<path_utf8(output_root)<<"\n";
+            std::cout<<"Samples       = "<<cases.size()<<"\nG_ads list    = [";for(size_t i=0;i<gads_values.size();++i){if(i)std::cout<<",";std::cout<<gads_values[i];}std::cout<<"]\n";
+            std::cout<<"Total jobs    = "<<cases.size()*gads_values.size()<<"\n";
+            std::cout<<"####################################################################################################\n";
+        }
         if(dry_run){
             int k=0;for(auto& gp:cases)for(double ga:gads_values){auto cn=extract_case_name(gp);std::cout<<++k<<". "<<cn<<" | Gads="<<ga<<" | "<<path_utf8(output_root/utf8_path(cn)/utf8_path(float_tag(ga,"Gads")))<<"\n";}
             if(pause_when_finished){std::cout<<"Press Enter to exit...";std::cin.get();}return 0;
@@ -286,33 +292,48 @@ int main(int argc,char** argv){
                 if(nk<0||nk>=nz)ffnb[o]=-1;else if(!solid[idx3(ni,nj,nk,nx,ny,nz)])ffnb[o]=grid[idx3(ni,nj,nk,nx,ny,nz)];else{ffnb[o]=-1;ads[o]=1;}
             }}
             std::vector<float> rho_init(nfluid,(float)rho_dry);for(size_t id=0;id<nfluid;++id){int i=xyz[id][0],j=xyz[id][1],k=xyz[id][2];if(k<nz_geo)rho_init[id]=(phase[flatF(i,j,k,nx,ny)]>0.5)?(float)rho_liq:(float)rho_gas;}
-            std::cout<<"[Geometry] "<<case_name<<" pores="<<nreal<<" phi="<<std::fixed<<std::setprecision(6)<<(double)nreal/expected<<" liquid_init="<<nliq<<" n_fluid="<<nfluid<<"\n";
+            if(verbose) std::cout<<"[Geometry] "<<case_name<<" pores="<<nreal<<" phi="<<std::fixed<<std::setprecision(6)<<(double)nreal/expected<<" liquid_init="<<nliq<<" n_fluid="<<nfluid<<"\n";
 
             for(double gads:gads_values){
                 ++jobno;fs::path outdir=output_root/utf8_path(case_name)/utf8_path(float_tag(gads,"Gads"));
                 std::string sig=job_signature(geo_hash,phase_hash,case_name,gads,rho_dry,nx,ny,nz_geo,n_buffer,pore_value,niu,G_int,beta,Tr,rho_liq,rho_gas,rho_l_eq,rho_g_eq,ini);
                 bool done_same=fs::exists(outdir/"DONE.json")&&file_text_contains(outdir/"DONE.json","\"signature\":\""+sig+"\"")&&file_text_contains(outdir/"DONE.json","\"total_steps\":"+std::to_string(total_steps));
-                std::cout<<"\n====================================================================================================\n[Batch "<<jobno<<"/"<<totaljobs<<"] "<<case_name<<" | Gads="<<std::showpos<<std::fixed<<std::setprecision(6)<<gads<<std::noshowpos<<"\n====================================================================================================\n";
-                if(done_same&&!force){std::cout<<"[Batch] completed configuration matches; skipped.\n";++skipped;summary.push_back({case_name,"SKIPPED",path_utf8(outdir),gads});continue;}
+                if(verbose) std::cout<<"\n====================================================================================================\n[Batch "<<jobno<<"/"<<totaljobs<<"] "<<case_name<<" | Gads="<<std::showpos<<std::fixed<<std::setprecision(6)<<gads<<std::noshowpos<<"\n====================================================================================================\n";
+                if(done_same&&!force){
+                    ++skipped;summary.push_back({case_name,"SKIPPED",path_utf8(outdir),gads});
+                    if(verbose) std::cout<<"[Batch] completed configuration matches; skipped.\n";
+                    else std::cout<<"SUCCESS: "<<case_name<<" | Gads="<<gads<<" | already completed\n";
+                    continue;
+                }
                 try{
-                    archive_dir_if_needed(outdir,sig,force!=0);fs::create_directories(outdir);write_signature(outdir,sig);
-                    NativeRunOptions opt;opt.total_steps=total_steps;opt.record_interval=record_interval;opt.print_interval=print_interval;opt.vtk_interval=vtk_interval;opt.checkpoint_interval=checkpoint_interval;opt.keep_checkpoints=keep_ck;opt.save_vtk=save_vtk;opt.device_memory_fraction=memfrac;opt.force=force;
+                    archive_dir_if_needed(outdir,sig,force!=0,verbose);fs::create_directories(outdir);write_signature(outdir,sig);
+                    NativeRunOptions opt;opt.total_steps=total_steps;opt.record_interval=record_interval;opt.print_interval=print_interval;opt.vtk_interval=vtk_interval;opt.checkpoint_interval=checkpoint_interval;opt.keep_checkpoints=keep_ck;opt.save_vtk=save_vtk;opt.device_memory_fraction=memfrac;opt.force=force;opt.verbose=verbose;
                     opt.case_name=case_name;opt.output_dir=path_utf8(outdir);opt.output_prefix=case_name+"_"+float_tag(gads,"Gads")+"_"+float_tag(rho_dry,"RhoDry")+"_";opt.signature=sig;
                     auto rr=run_native_production(nx,ny,nz_geo,n_buffer,(float)niu,(float)G_int,(float)beta,(float)Tr,(float)gads,(float)rho_liq,(float)rho_gas,(float)rho_l_eq,(float)rho_g_eq,(float)rho_dry,xyz,grid,pull,ffnb,ads,rho_init,solid,buffer,opt);
                     ++success;summary.push_back({case_name,"DONE",path_utf8(outdir),gads,rr.final_saturation_equiv,rr.final_ER_liquid_equiv_lu,rr.final_J_soil_lu,rr.final_J_top_direct_lu,rr.final_bc_mass_balance_error_rel,rr.rho_min_final,rr.rho_max_final,rr.wall_time_sec});
-                }catch(const std::exception& ex){++failed;summary.push_back({case_name,std::string("FAILED: ")+ex.what(),path_utf8(outdir),gads});std::cerr<<"[Batch][FAILED] "<<ex.what()<<"\n";}
+                    if(!verbose) std::cout<<"SUCCESS: "<<case_name<<" | Gads="<<gads<<"\n";
+                }catch(const std::exception& ex){
+                    ++failed;summary.push_back({case_name,std::string("FAILED: ")+ex.what(),path_utf8(outdir),gads});
+                    if(verbose) std::cerr<<"[Batch][FAILED] "<<ex.what()<<"\n";
+                    else std::cerr<<"FAILED: "<<case_name<<" | Gads="<<gads<<" | "<<ex.what()<<"\n";
+                }
                 if(jobno<totaljobs&&wait_seconds>0)std::this_thread::sleep_for(std::chrono::duration<double>(wait_seconds));
             }
         }
 
         fs::path sumfile=output_root/"batch_summary.csv";std::ofstream so(sumfile);so<<"case_name,G_ADS,status,final_saturation_equiv,final_ER_liquid_equiv_lu,final_J_soil_lu,final_J_top_direct_lu,final_bc_mass_balance_error_rel,rho_min_final,rho_max_final,wall_time_sec,output_dir\n";
         for(auto&r:summary)so<<r.case_name<<","<<std::setprecision(17)<<r.gads<<","<<r.status<<","<<r.sat<<","<<r.er<<","<<r.js<<","<<r.jt<<","<<r.bcr<<","<<r.rmin<<","<<r.rmax<<","<<r.wall<<","<<r.output<<"\n";
-        std::cout<<"\n####################################################################################################\n[Batch] ALL DONE\n[Batch] success="<<success<<"\n[Batch] skipped="<<skipped<<"\n[Batch] failed="<<failed<<"\n[Batch] summary="<<path_utf8(sumfile)<<"\n####################################################################################################\n";
-        if(pause_when_finished){std::cout<<"Press Enter to exit...";std::cin.get();}
+        if(verbose){
+            std::cout<<"\n####################################################################################################\n[Batch] ALL DONE\n[Batch] success="<<success<<"\n[Batch] skipped="<<skipped<<"\n[Batch] failed="<<failed<<"\n[Batch] summary="<<path_utf8(sumfile)<<"\n####################################################################################################\n";
+        }else{
+            if(failed==0) std::cout<<"SUCCESS: all jobs completed | success="<<success<<" | skipped="<<skipped<<"\n";
+            else std::cerr<<"FAILED: batch completed with "<<failed<<" failed job(s)\n";
+        }
+        if(pause_when_finished){if(verbose)std::cout<<"Press Enter to exit...";std::cin.get();}
         return failed?1:0;
     }catch(const std::exception& e){
-        std::cerr<<"\n[FATAL] "<<e.what()<<"\n";
-        if(pause_when_finished){std::cout<<"Press Enter to exit...";std::cin.get();}
+        std::cerr<<"FAILED: "<<e.what()<<"\n";
+        if(pause_when_finished)std::cin.get();
         return 1;
     }
 }
