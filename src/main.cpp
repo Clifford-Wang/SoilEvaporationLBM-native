@@ -49,8 +49,24 @@ struct Ini {
     int geti(const std::string&s,const std::string&k,int d=0)const{auto v=get(s,k,"");return v.empty()?d:std::stoi(v);}
 };
 
+static fs::path utf8_path(const std::string& s){
+#ifdef _WIN32
+    return fs::u8path(s);
+#else
+    return fs::path(s);
+#endif
+}
+
+static std::string path_utf8(const fs::path& p){
+#ifdef _WIN32
+    return p.u8string();
+#else
+    return p.string();
+#endif
+}
+
 static fs::path resolve_path(const fs::path& cfg,const std::string& raw){
-    fs::path p(trim(raw));
+    fs::path p=utf8_path(trim(raw));
     if(p.is_absolute()) return p;
     return fs::weakly_canonical(cfg.parent_path()/p);
 }
@@ -67,12 +83,12 @@ static std::set<std::string> parse_names(const std::string& raw){
 }
 
 static std::string extract_case_name(const fs::path& p){
-    std::string base=p.filename().string();
+    std::string base=path_utf8(p.filename());
     base=std::regex_replace(base,std::regex("\\s+")," ");
     std::smatch m;
     std::regex re("(.+?)_connected_Z_THROUGH.*\\.txt$",std::regex::icase);
     if(std::regex_match(base,m,re)) return trim(m[1].str());
-    return p.stem().string();
+    return path_utf8(p.stem());
 }
 
 static std::regex glob_to_regex(std::string pat){
@@ -93,11 +109,11 @@ static std::regex glob_to_regex(std::string pat){
 }
 
 static std::vector<fs::path> find_cases(const fs::path& root,const std::string& pat,const std::set<std::string>& only,const std::set<std::string>& exclude){
-    if(!fs::is_directory(root)) throw std::runtime_error("Geometry root does not exist: "+root.string());
+    if(!fs::is_directory(root)) throw std::runtime_error("Geometry root does not exist: "+path_utf8(root));
     std::vector<fs::path> out; auto re=glob_to_regex(pat);
     for(const auto& e:fs::recursive_directory_iterator(root)){
         if(!e.is_regular_file()) continue;
-        auto rel=fs::relative(e.path(),root).generic_string();
+        auto rel=fs::relative(e.path(),root).generic_u8string();
         if(!std::regex_match(rel,re)) continue;
         auto name=extract_case_name(e.path());
         if(!only.empty()&&!only.count(name)) continue;
@@ -109,7 +125,7 @@ static std::vector<fs::path> find_cases(const fs::path& root,const std::string& 
 }
 
 static std::vector<long long> load_ints(const fs::path& p,size_t expected){
-    std::ifstream f(p); if(!f) throw std::runtime_error("Cannot open geometry: "+p.string());
+    std::ifstream f(p); if(!f) throw std::runtime_error("Cannot open geometry: "+path_utf8(p));
     std::vector<long long> v; v.reserve(expected); long long x;
     while(f>>x) v.push_back(x);
     if(v.size()!=expected) throw std::runtime_error("Geometry element count mismatch: expected "+std::to_string(expected)+", got "+std::to_string(v.size()));
@@ -117,7 +133,7 @@ static std::vector<long long> load_ints(const fs::path& p,size_t expected){
 }
 
 static std::vector<double> load_doubles(const fs::path& p,size_t expected){
-    std::ifstream f(p); if(!f) throw std::runtime_error("Cannot open phase: "+p.string());
+    std::ifstream f(p); if(!f) throw std::runtime_error("Cannot open phase: "+path_utf8(p));
     std::vector<double> v; v.reserve(expected); double x;
     while(f>>x) v.push_back(x);
     if(v.size()!=expected) throw std::runtime_error("Phase element count mismatch: expected "+std::to_string(expected)+", got "+std::to_string(v.size()));
@@ -161,7 +177,7 @@ int main(int argc,char** argv){
         if(cases.empty()) throw std::runtime_error("No geometry matched current config.");
         if(cases.size()!=1){
             std::ostringstream os;os<<"Stage-1 validation expects exactly one selected geometry; matched "<<cases.size()<<":\n";
-            for(auto&p:cases)os<<"  "<<p.string()<<"\n";
+            for(auto&p:cases)os<<"  "<<path_utf8(p)<<"\n";
             throw std::runtime_error(os.str());
         }
         auto geo_file=cases.front();
@@ -170,10 +186,10 @@ int main(int argc,char** argv){
         std::cout<<"================================================================================\n";
         std::cout<<"SoilEvaporationLBM native Stage-1 geometry/mapping validator\n";
         std::cout<<"================================================================================\n";
-        std::cout<<"Config    : "<<cfg.string()<<"\n";
+        std::cout<<"Config    : "<<path_utf8(cfg)<<"\n";
         std::cout<<"Case      : "<<case_name<<"\n";
-        std::cout<<"Geometry  : "<<geo_file.string()<<"\n";
-        std::cout<<"Phase     : "<<phase_file.string()<<"\n";
+        std::cout<<"Geometry  : "<<path_utf8(geo_file)<<"\n";
+        std::cout<<"Phase     : "<<path_utf8(phase_file)<<"\n";
         std::cout<<"Grid      : "<<nx<<" x "<<ny<<" x "<<nz_geo<<" + buffer "<<n_buffer<<"\n";
 
         auto gf=load_ints(geo_file,expected);
