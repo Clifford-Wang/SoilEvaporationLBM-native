@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <vector>
 
-#define CUDA_CHECK(call) do{cudaError_t e=(call);if(e!=cudaSuccess){std::ostringstream os;os<<"CUDA error "<<cudaGetErrorName(e)<<": "<<cudaGetErrorString(e)<<" at "<<__FILE__<<":"<<__LINE__;throw std::runtime_error(os.str());}}while(0)
+#define CUDA_CHECK(call) do{cudaError_t _cuda_err=(call);if(_cuda_err!=cudaSuccess){std::ostringstream os;os<<"CUDA error "<<cudaGetErrorName(_cuda_err)<<": "<<cudaGetErrorString(_cuda_err)<<" at "<<__FILE__<<":"<<__LINE__;throw std::runtime_error(os.str());}}while(0)
 
 namespace{
 constexpr int Q=19;
