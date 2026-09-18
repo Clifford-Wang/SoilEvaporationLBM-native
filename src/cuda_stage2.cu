@@ -160,8 +160,8 @@ struct DM{
     double* bc=nullptr;
     ~DM(){cudaFree(xyz);cudaFree(grid);cudaFree(pull);cudaFree(solidnb);cudaFree(ff);cudaFree(ads);cudaFree(rho0);cudaFree(rho);cudaFree(psi);cudaFree(pressure);cudaFree(vx);cudaFree(vy);cudaFree(vz);cudaFree(fx);cudaFree(fy);cudaFree(fz);cudaFree(f);cudaFree(F);cudaFree(bc);}
 };
-template<class T> void ac(T*& d,const std::vector<T>& h){CUDA_CHECK(cudaMalloc(&d,h.size()*sizeof(T)));CUDA_CHECK(cudaMemcpy(d,h.data(),h.size()*sizeof(T),cudaMemcpyHostToDevice));}
-template<class T> void ao(T*& d,size_t n){CUDA_CHECK(cudaMalloc(&d,n*sizeof(T)));}
+template<class T> void ac(T*& d,const std::vector<T>& h){CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d),h.size()*sizeof(T)));CUDA_CHECK(cudaMemcpy(d,h.data(),h.size()*sizeof(T),cudaMemcpyHostToDevice));}
+template<class T> void ao(T*& d,size_t n){CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d),n*sizeof(T)));}
 }
 
 void run_cuda_stage2(
