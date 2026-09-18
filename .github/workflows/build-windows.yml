@@ -1,4 +1,4 @@
-name: Build Windows Native Stage1
+name: Build Windows Native Stage2 CUDA
 
 on:
   workflow_dispatch:
@@ -12,6 +12,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install CUDA Toolkit 12.6.3
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: '12.6.3'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart", "cudart_dev"]'
+          use-github-cache: false
+
+      - name: Show toolchain
+        shell: pwsh
+        run: |
+          nvcc --version
+          cmake --version
+
       - name: Configure Release x64
         shell: pwsh
         run: cmake -S . -B build -A x64
@@ -24,20 +38,20 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item build\Release\SoilEvaporationLBM_stage1.exe dist\
+          Copy-Item build\Release\SoilEvaporationLBM_stage2.exe dist\
           Copy-Item config.txt dist\
           @'
           @echo off
           chcp 65001 >nul
           cd /d "%~dp0"
-          SoilEvaporationLBM_stage1.exe config.txt
+          SoilEvaporationLBM_stage2.exe config.txt
           echo.
           pause
-          '@ | Set-Content -Encoding ASCII dist\run_stage1.bat
+          '@ | Set-Content -Encoding ASCII dist\run_stage2.bat
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SoilEvaporationLBM-native-stage1-windows
+          name: SoilEvaporationLBM-native-stage2-windows
           path: dist/*
           if-no-files-found: error
