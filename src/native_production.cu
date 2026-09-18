@@ -363,6 +363,18 @@ static void write_vtk_legacy(
     auto dense_index=[=](int i,int j,int k){return ((size_t)i*ny+j)*nz+k;};
     out<<"SCALARS Solid unsigned_char 1\nLOOKUP_TABLE default\n";
     for(int k=0;k<nz;++k)for(int j=0;j<ny;++j)for(int i=0;i<nx;++i)out<<(int)solid[dense_index(i,j,k)]<<"\n";
+    out<<"SCALARS Wall unsigned_char 1\nLOOKUP_TABLE default\n";
+    static const int ve[18][3]={{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1},{1,1,0},{-1,-1,0},{1,-1,0},{-1,1,0},{1,0,1},{-1,0,-1},{1,0,-1},{-1,0,1},{0,1,1},{0,-1,-1},{0,1,-1},{0,-1,1}};
+    for(int k=0;k<nz;++k)for(int j=0;j<ny;++j)for(int i=0;i<nx;++i){
+        uint8_t wall=0;
+        if(solid[dense_index(i,j,k)]){
+            for(const auto& d:ve){
+                int ii=i+d[0],jj=j+d[1],kk=k+d[2];
+                if(ii>=0&&ii<nx&&jj>=0&&jj<ny&&kk>=0&&kk<nz&&!solid[dense_index(ii,jj,kk)]){wall=1;break;}
+            }
+        }
+        out<<(int)wall<<"\n";
+    }
     out<<"SCALARS BufferMask unsigned_char 1\nLOOKUP_TABLE default\n";
     for(int k=0;k<nz;++k)for(int j=0;j<ny;++j)for(int i=0;i<nx;++i)out<<(int)buffer[dense_index(i,j,k)]<<"\n";
     auto write_scalar=[&](const char* name,const std::vector<float>& a){
@@ -373,6 +385,12 @@ static void write_vtk_legacy(
         }
     };
     write_scalar("rho",rho);write_scalar("psi",psi);write_scalar("pressure",pressure);
+    out<<"SCALARS vel_mag float 1\nLOOKUP_TABLE default\n"<<std::setprecision(8);
+    for(int k=0;k<nz;++k)for(int j=0;j<ny;++j)for(int i=0;i<nx;++i){
+        int id=grid[dense_index(i,j,k)];
+        if(id>=0)out<<std::sqrt(vx[(size_t)id]*vx[(size_t)id]+vy[(size_t)id]*vy[(size_t)id]+vz[(size_t)id]*vz[(size_t)id])<<"\n";
+        else out<<"0\n";
+    }
     out<<"VECTORS velocity float\n"<<std::setprecision(8);
     for(int k=0;k<nz;++k)for(int j=0;j<ny;++j)for(int i=0;i<nx;++i){
         int id=grid[dense_index(i,j,k)];
@@ -427,8 +445,9 @@ NativeRunResult run_native_production(
     int dev=-1;CUDA_CHECK(cudaGetDevice(&dev));cudaDeviceProp prop{};CUDA_CHECK(cudaGetDeviceProperties(&prop,dev));
     std::cout<<"[CUDA] device="<<prop.name<<" | compute capability "<<prop.major<<"."<<prop.minor
              <<" | VRAM="<<(prop.totalGlobalMem/(1024ull*1024ull))<<" MB\n";
-    if(!((prop.major==7&&prop.minor==5)||prop.major==8|| (prop.major==8&&prop.minor==9))){
-        std::cout<<"[CUDA][Warn] This release embeds native code for sm_75/sm_80/sm_86/sm_89. Unsupported GPUs may fail to launch.\n";
+    const bool supported_cc=(prop.major==7&&prop.minor==5)||(prop.major==8&&(prop.minor==0||prop.minor==6||prop.minor==9))||(prop.major==9&&prop.minor==0)||(prop.major==12&&prop.minor==0);
+    if(!supported_cc){
+        std::cout<<"[CUDA][Warn] This release embeds native code for sm_75/sm_80/sm_86/sm_89/sm_90/sm_120. Unsupported GPUs may fail to launch.\n";
     }
 
     const int e[Q*3]={0,0,0,1,0,0,-1,0,0,0,1,0,0,-1,0,0,0,1,0,0,-1,1,1,0,-1,-1,0,1,-1,0,-1,1,0,1,0,1,-1,0,-1,1,0,-1,-1,0,1,0,1,1,0,-1,-1,0,1,-1,0,-1,1};
