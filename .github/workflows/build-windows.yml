@@ -1,0 +1,43 @@
+name: Build Windows Native Stage1
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Release x64
+        shell: pwsh
+        run: cmake -S . -B build -A x64
+
+      - name: Build Release
+        shell: pwsh
+        run: cmake --build build --config Release --parallel
+
+      - name: Prepare artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build\Release\SoilEvaporationLBM_stage1.exe dist\
+          Copy-Item config.txt dist\
+          @'
+          @echo off
+          chcp 65001 >nul
+          cd /d "%~dp0"
+          SoilEvaporationLBM_stage1.exe config.txt
+          echo.
+          pause
+          '@ | Set-Content -Encoding ASCII dist\run_stage1.bat
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SoilEvaporationLBM-native-stage1-windows
+          path: dist/*
+          if-no-files-found: error
