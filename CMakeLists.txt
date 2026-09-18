@@ -17,8 +17,8 @@ target_include_directories(SoilEvaporationLBM PRIVATE include)
 target_link_libraries(SoilEvaporationLBM PRIVATE CUDA::cudart_static)
 set_property(TARGET SoilEvaporationLBM PROPERTY CUDA_RUNTIME_LIBRARY Static)
 # One binary for common NVIDIA workstation/laptop generations:
-# Turing RTX20 (75), Ampere A100 (80), RTX30 (86), Ada RTX40 (89).
-set_property(TARGET SoilEvaporationLBM PROPERTY CUDA_ARCHITECTURES "75-real;80-real;86-real;89-real")
+# Turing RTX20 (75), Ampere A100/RTX30 (80/86), Ada RTX40 (89), Hopper (90), Blackwell RTX50 (120).
+set_property(TARGET SoilEvaporationLBM PROPERTY CUDA_ARCHITECTURES "75-real;80-real;86-real;89-real;90-real;120-real")
 set_property(TARGET SoilEvaporationLBM PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(MSVC)
