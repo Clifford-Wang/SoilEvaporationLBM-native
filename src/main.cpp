@@ -2,6 +2,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
