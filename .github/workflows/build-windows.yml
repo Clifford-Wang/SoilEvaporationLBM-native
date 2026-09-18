@@ -17,7 +17,7 @@ jobs:
         with:
           cuda: '12.6.3'
           method: 'network'
-          sub-packages: '["nvcc", "cudart", "cudart_dev"]'
+          sub-packages: '["nvcc", "cudart", "visual_studio_integration"]'
           use-github-cache: false
 
       - name: Show toolchain
