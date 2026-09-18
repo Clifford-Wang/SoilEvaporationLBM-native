@@ -92,16 +92,27 @@ static std::string extract_case_name(const fs::path& p){
 }
 
 static std::regex glob_to_regex(std::string pat){
+    // Match Python pathlib Path.glob semantics needed by the reference runner.
+    // In particular, "**/" must also match zero directory levels, so files
+    // directly under geometry_root are included.
     std::string r="^";
-    for(size_t i=0;i<pat.size();++i){
-        char c=pat[i];
-        if(c=='*'){
-            if(i+1<pat.size()&&pat[i+1]=='*'){r+=".*";++i;}
-            else r+="[^/]*";
-        }else if(c=='?') r+=".";
+    for(size_t i=0;i<pat.size();){
+        if(i+3<=pat.size() && pat.compare(i,3,"**/")==0){
+            r+="(?:.*/)?";
+            i+=3;
+            continue;
+        }
+        if(i+2<=pat.size() && pat.compare(i,2,"**")==0){
+            r+=".*";
+            i+=2;
+            continue;
+        }
+        char ch=pat[i++];
+        if(ch=='*') r+="[^/]*";
+        else if(ch=='?') r+="[^/]";
         else{
-            if(std::string(".^$|()[]{}+\\").find(c)!=std::string::npos) r+='\\';
-            r+=c;
+            if(std::string(".^$|()[]{}+\\").find(ch)!=std::string::npos) r+='\\';
+            r+=ch;
         }
     }
     r+="$";
@@ -174,7 +185,22 @@ int main(int argc,char** argv){
         auto only=parse_names(ini.get("SAMPLES","only"));
         auto exclude=parse_names(ini.get("SAMPLES","exclude"));
         auto cases=find_cases(geo_root,pattern,only,exclude);
-        if(cases.empty()) throw std::runtime_error("No geometry matched current config.");
+        if(cases.empty()){
+            std::ostringstream os;
+            os<<"No geometry matched current config.\n";
+            os<<"  geometry_root = "<<path_utf8(geo_root)<<"\n";
+            os<<"  pattern       = "<<pattern<<"\n";
+            os<<"  only          = "<<ini.get("SAMPLES","only")<<"\n";
+            os<<"  visible txt files (first 10):\n";
+            int shown=0;
+            for(const auto& e:fs::recursive_directory_iterator(geo_root)){
+                if(!e.is_regular_file()) continue;
+                if(e.path().extension()!=".txt" && e.path().extension()!=".TXT") continue;
+                os<<"    "<<path_utf8(fs::relative(e.path(),geo_root))<<"\n";
+                if(++shown>=10) break;
+            }
+            throw std::runtime_error(os.str());
+        }
         if(cases.size()!=1){
             std::ostringstream os;os<<"Stage-1 validation expects exactly one selected geometry; matched "<<cases.size()<<":\n";
             for(auto&p:cases)os<<"  "<<path_utf8(p)<<"\n";
