@@ -14,6 +14,7 @@ struct NativeRunOptions{
     int save_vtk=1;
     double device_memory_fraction=0.86;
     int force=0;
+    bool verbose=true;
     std::string case_name;
     std::string output_dir;
     std::string output_prefix;
