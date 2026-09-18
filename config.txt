@@ -1,5 +1,5 @@
 # SoilEvaporationLBM 配置文件
-# Stage-1 Native 验证版：保持与你当前 200^3 / sample 21 测试一致。
+# SoilEvaporationLBM Native CUDA 最终版配置文件
 
 [PATHS]
 geometry_root=F:\Paper\Pore-scale isothermal evaporation in tillage-shaped soil microstructures\本文所用图像\connected_pores
@@ -42,6 +42,11 @@ device_memory_fraction=0.86
 wait_seconds=3.0
 
 [CONTROL]
+# 控制台输出模式：
+# minimal = 只显示每个工况成功/失败及最终汇总
+# full    = 显示GPU、初始化、迭代、checkpoint等完整过程
+console_mode=minimal
+
 force=0
 dry_run=0
 pause_when_finished=1
