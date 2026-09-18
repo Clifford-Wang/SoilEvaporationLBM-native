@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "cuda_stage2.hpp"
 
 namespace fs = std::filesystem;
 
@@ -47,6 +48,7 @@ struct Ini {
         auto b=a->second.find(k); return b==a->second.end()?d:b->second;
     }
     int geti(const std::string&s,const std::string&k,int d=0)const{auto v=get(s,k,"");return v.empty()?d:std::stoi(v);}
+    double getd(const std::string&s,const std::string&k,double d=0.0)const{auto v=get(s,k,"");return v.empty()?d:std::stod(v);}
 };
 
 static fs::path utf8_path(const std::string& s){
@@ -178,6 +180,18 @@ int main(int argc,char** argv){
         if(nx<=0||ny<=0||nz_geo<=0||n_buffer<0) throw std::runtime_error("Invalid GRID settings.");
         const int nz=nz_geo+n_buffer;
         const size_t expected=static_cast<size_t>(nx)*ny*nz_geo;
+        const float niu=static_cast<float>(ini.getd("PHYSICS","niu",0.20));
+        const float G_int=static_cast<float>(ini.getd("PHYSICS","G_int",-1.0));
+        const float beta_sc=static_cast<float>(ini.getd("PHYSICS","beta_sc",1.16));
+        const float Tr=static_cast<float>(ini.getd("PHYSICS","Tr",0.86));
+        const float rho_liq=static_cast<float>(ini.getd("PHYSICS","rho_liq",6.498946));
+        const float rho_gas=static_cast<float>(ini.getd("PHYSICS","rho_gas",0.379679));
+        const float rho_l_eq=static_cast<float>(ini.getd("PHYSICS","rho_l_eq",rho_liq));
+        const float rho_g_eq=static_cast<float>(ini.getd("PHYSICS","rho_g_eq",rho_gas));
+        const float rho_dry=static_cast<float>(ini.getd("PHYSICS","rho_dry",0.37));
+        std::stringstream gss(ini.get("PHYSICS","G_ads","-0.20"));
+        std::string gfirst; std::getline(gss,gfirst,',');
+        const float G_ads=static_cast<float>(std::stod(trim(gfirst)));
 
         auto geo_root=resolve_path(cfg,ini.get("PATHS","geometry_root"));
         auto phase_file=resolve_path(cfg,ini.get("PATHS","phase_file"));
@@ -210,7 +224,7 @@ int main(int argc,char** argv){
         auto case_name=extract_case_name(geo_file);
 
         std::cout<<"================================================================================\n";
-        std::cout<<"SoilEvaporationLBM native Stage-1 geometry/mapping validator\n";
+        std::cout<<"SoilEvaporationLBM native Stage-2 CUDA initialization/force validator\n";
         std::cout<<"================================================================================\n";
         std::cout<<"Config    : "<<path_utf8(cfg)<<"\n";
         std::cout<<"Case      : "<<case_name<<"\n";
@@ -270,22 +284,30 @@ int main(int argc,char** argv){
         for(auto&xyz:fluid_xyz){h_xyz=hash_i32(h_xyz,xyz[0]);h_xyz=hash_i32(h_xyz,xyz[1]);h_xyz=hash_i32(h_xyz,xyz[2]);}
         for(int32_t x:grid_to_idx)h_grid=hash_i32(h_grid,x);
 
+        std::vector<int32_t> pull_nb(n_fluid*19);
+        std::vector<int32_t> is_solid_nb(n_fluid*19);
+        std::vector<int32_t> ff_nb(n_fluid*19);
+        std::vector<int32_t> ads_solid_nb(n_fluid*19);
+
         for(size_t id=0;id<fluid_xyz.size();++id){
             int i=fluid_xyz[id][0],j=fluid_xyz[id][1],k=fluid_xyz[id][2];
             for(int q=0;q<19;++q){
+                const size_t off=id*19+q;
                 int src_i=wrap(i-e[q][0],nx),src_j=wrap(j-e[q][1],ny),src_k=k-e[q][2];
-                int32_t pull; uint8_t is_solid=0;
+                int32_t pull; int32_t is_solid=0;
                 if(src_k<0||src_k>=nz){pull=-2;++pull_oob;}
                 else if(solid[idx3(src_i,src_j,src_k,nx,ny,nz)]==0){pull=grid_to_idx[idx3(src_i,src_j,src_k,nx,ny,nz)];++pull_fluid;}
                 else{pull=-1;is_solid=1;++pull_solid;}
-                h_pull=hash_i32(h_pull,pull);h_solid=hash_u8(h_solid,is_solid);
+                pull_nb[off]=pull; is_solid_nb[off]=is_solid;
+                h_pull=hash_i32(h_pull,pull);h_solid=hash_u8(h_solid,static_cast<uint8_t>(is_solid));
 
                 int ni=wrap(i+e[q][0],nx),nj=wrap(j+e[q][1],ny),nk=k+e[q][2];
-                int32_t ff; uint8_t ads=0;
+                int32_t ff; int32_t ads=0;
                 if(nk<0||nk>=nz){ff=-1;++ff_oob;}
                 else if(solid[idx3(ni,nj,nk,nx,ny,nz)]==0){ff=grid_to_idx[idx3(ni,nj,nk,nx,ny,nz)];++ff_fluid;}
                 else{ff=-1;ads=1;++ff_solid;}
-                h_ff=hash_i32(h_ff,ff);h_ads=hash_u8(h_ads,ads);
+                ff_nb[off]=ff; ads_solid_nb[off]=ads;
+                h_ff=hash_i32(h_ff,ff);h_ads=hash_u8(h_ads,static_cast<uint8_t>(ads));
             }
         }
 
@@ -300,8 +322,27 @@ int main(int argc,char** argv){
         std::cout<<"[Neighbor] ff   fluid/solid/oob = "<<ff_fluid<<" / "<<ff_solid<<" / "<<ff_oob<<"\n";
         std::cout<<"[Sample] first fluid_xyz = ("<<fluid_xyz.front()[0]<<","<<fluid_xyz.front()[1]<<","<<fluid_xyz.front()[2]<<")\n";
         std::cout<<"[Sample] last  fluid_xyz = ("<<fluid_xyz.back()[0]<<","<<fluid_xyz.back()[1]<<","<<fluid_xyz.back()[2]<<")\n";
+
+        std::vector<float> rho_init(n_fluid,rho_dry);
+        for(size_t id=0;id<fluid_xyz.size();++id){
+            const int i=fluid_xyz[id][0],j=fluid_xyz[id][1],k=fluid_xyz[id][2];
+            if(k<nz_geo){
+                const bool liquid=(pf[flatF(i,j,k,nx,ny)]>0.5);
+                rho_init[id]=liquid?rho_liq:rho_gas;
+            }
+        }
+
+        std::cout<<"--------------------------------------------------------------------------------\n";
+        std::cout<<"[CUDA] Stage-2: initialization + PR-EOS/psi + Shan-Chen/adsorption force\n";
+        std::cout<<"--------------------------------------------------------------------------------\n";
+        run_cuda_stage2(
+            nx,ny,nz_geo,n_buffer,
+            niu,G_int,beta_sc,Tr,G_ads,
+            rho_liq,rho_gas,rho_l_eq,rho_g_eq,rho_dry,
+            fluid_xyz,grid_to_idx,pull_nb,is_solid_nb,ff_nb,ads_solid_nb,rho_init
+        );
         std::cout<<"================================================================================\n";
-        std::cout<<"[PASS] Native Stage-1 preprocessing completed. No Python/Taichi used.\n";
+        std::cout<<"[PASS] Native Stage-2 CUDA validation completed. No Python/Taichi used.\n";
         std::cout<<"================================================================================\n";
         return 0;
     }catch(const std::exception& e){
