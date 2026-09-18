@@ -1,4 +1,4 @@
-name: Build Windows Native Stage2 CUDA
+name: Build Windows Native Stage3 CUDA
 
 on:
   workflow_dispatch:
@@ -38,20 +38,20 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item build\Release\SoilEvaporationLBM_stage2.exe dist\
+          Copy-Item build\Release\SoilEvaporationLBM_stage3.exe dist\
           Copy-Item config.txt dist\
           @'
           @echo off
           chcp 65001 >nul
           cd /d "%~dp0"
-          SoilEvaporationLBM_stage2.exe config.txt
+          SoilEvaporationLBM_stage3.exe config.txt
           echo.
           pause
-          '@ | Set-Content -Encoding ASCII dist\run_stage2.bat
+          '@ | Set-Content -Encoding ASCII dist\run_stage3.bat
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SoilEvaporationLBM-native-stage2-windows
+          name: SoilEvaporationLBM-native-stage3-windows
           path: dist/*
           if-no-files-found: error
