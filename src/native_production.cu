@@ -443,11 +443,11 @@ NativeRunResult run_native_production(
     if(rho_l_eq<=rho_g_eq)throw std::runtime_error("rho_l_eq must be greater than rho_g_eq.");
 
     int dev=-1;CUDA_CHECK(cudaGetDevice(&dev));cudaDeviceProp prop{};CUDA_CHECK(cudaGetDeviceProperties(&prop,dev));
-    std::cout<<"[CUDA] device="<<prop.name<<" | compute capability "<<prop.major<<"."<<prop.minor
+    if(opt.verbose) std::cout<<"[CUDA] device="<<prop.name<<" | compute capability "<<prop.major<<"."<<prop.minor
              <<" | VRAM="<<(prop.totalGlobalMem/(1024ull*1024ull))<<" MB\n";
     const bool supported_cc=(prop.major==7&&prop.minor==5)||(prop.major==8&&(prop.minor==0||prop.minor==6||prop.minor==9))||(prop.major==9&&prop.minor==0)||(prop.major==12&&prop.minor==0);
     if(!supported_cc){
-        std::cout<<"[CUDA][Warn] This release embeds native code for sm_75/sm_80/sm_86/sm_89/sm_90/sm_120. Unsupported GPUs may fail to launch.\n";
+        if(opt.verbose) std::cout<<"[CUDA][Warn] This release embeds native code for sm_75/sm_80/sm_86/sm_89/sm_90/sm_120. Unsupported GPUs may fail to launch.\n";
     }
 
     const int e[Q*3]={0,0,0,1,0,0,-1,0,0,0,1,0,0,-1,0,0,0,1,0,0,-1,1,1,0,-1,-1,0,1,-1,0,-1,1,0,1,0,1,-1,0,-1,1,0,-1,-1,0,1,0,1,1,0,-1,-1,0,1,-1,0,-1,1};
@@ -541,9 +541,9 @@ NativeRunResult run_native_production(
                 read_vec(in,hpsi,n);read_vec(in,hp,n);read_vec(in,hfx,n);read_vec(in,hfy,n);read_vec(in,hfz,n);read_vec(in,hbc,(size_t)nx*ny);
                 copy_all_to_device();s0=h.s0;prev=h.prev;last=prev;start_step=h.step;prev_record_step=h.prev_record_step;wall_base=h.wall_time_sec;resumed=true;
                 truncate_stats_to_step(stats_tmp,start_step);
-                std::cout<<"[Resume] checkpoint="<<cp.filename().string()<<" step="<<start_step<<"\n";
+                if(opt.verbose) std::cout<<"[Resume] checkpoint="<<cp.filename().string()<<" step="<<start_step<<"\n";
                 break;
-            }catch(const std::exception& ex){std::cout<<"[Resume][Warn] "<<cp.filename().string()<<": "<<ex.what()<<"\n";}
+            }catch(const std::exception& ex){if(opt.verbose) std::cout<<"[Resume][Warn] "<<cp.filename().string()<<": "<<ex.what()<<"\n";}
         }
     }
 
@@ -558,7 +558,7 @@ NativeRunResult run_native_production(
         write_vec(out,hpsi);write_vec(out,hp);write_vec(out,hfx);write_vec(out,hfy);write_vec(out,hfz);write_vec(out,hbc);out.close();
         if(!out)throw std::runtime_error("Checkpoint write failed.");
         std::error_code ec;fs::remove(cp,ec);fs::rename(tmp,cp);prune_ckpt(outdir,ckprefix,opt.keep_checkpoints);
-        std::cout<<"[Checkpoint] "<<cp.filename().string()<<"\n";
+        if(opt.verbose) std::cout<<"[Checkpoint] "<<cp.filename().string()<<"\n";
     };
 
     const char* csv_header="case_name,G_ADS,rho_dry,iter,wall_time_sec,rho_l_eq,rho_g_eq,Tr,G_int,beta_sc,real_pore_nodes,real_porosity,mass_soil,mass_buffer,mass_domain,saturation_threshold,saturation_equiv,liquid_volume_equiv,liquid_mass_equiv,soil_mass_loss_interval,domain_mass_loss_interval,buffer_mass_change_interval,liquid_mass_loss_interval,top_outflow_mass_interval,J_soil_lu,J_out_mass_lu,J_top_direct_lu,ER_liquid_equiv_lu,soil_mass_loss_cumulative,domain_mass_loss_cumulative,liquid_mass_loss_cumulative,top_outflow_mass_cumulative,mass_partition_error,mass_partition_error_rel,bc_mass_balance_error_interval,bc_mass_balance_error_rel,rho_min,rho_max\n";
@@ -595,7 +595,7 @@ NativeRunResult run_native_production(
             <<nreal<<","<<(double(nreal)/(double(nx)*ny*nz_geo))<<","<<s0.mass_soil<<","<<s0.mass_buffer<<","<<s0.mass_domain<<","<<s0.sat_threshold<<","<<s0.sat_equiv<<","<<s0.liquid_volume<<","<<s0.liquid_mass
             <<",0,0,0,0,0,0,0,0,0,0,0,0,0,"<<(s0.mass_domain-s0.mass_soil-s0.mass_buffer)<<","<<std::abs(s0.mass_domain-s0.mass_soil-s0.mass_buffer)/std::max(std::abs(s0.mass_domain),1e-30)
             <<",0,0,"<<s0.rho_min<<","<<s0.rho_max<<"\n";rout.close();
-        std::cout<<std::fixed<<std::setprecision(6)<<"[Init] pores="<<nreal<<" phi="<<(double(nreal)/(double(nx)*ny*nz_geo))
+        if(opt.verbose) std::cout<<std::fixed<<std::setprecision(6)<<"[Init] pores="<<nreal<<" phi="<<(double(nreal)/(double(nx)*ny*nz_geo))
                  <<" | Msoil="<<s0.mass_soil<<" Mbuffer="<<s0.mass_buffer<<" Mdomain="<<s0.mass_domain
                  <<" | Sat_th="<<s0.sat_threshold<<" Sat_eq="<<s0.sat_equiv<<" | rho=["<<s0.rho_min<<","<<s0.rho_max<<"]\n";
         if(opt.save_vtk){copy_all_from_device();write_vtk_legacy(outdir/(opt.output_prefix+"0.vtk"),nx,ny,p.nz,solid_dense,buffer_dense,grid_to_idx,hrho,hpsi,hp,hvx,hvy,hvz);}
@@ -619,7 +619,7 @@ NativeRunResult run_native_production(
             last_metrics=append_row(it,wall,s,prev,prev_record_step);last=s;prev=s;prev_record_step=it;
             if(!std::isfinite(s.mass_domain)||!std::isfinite(s.sat_equiv)||!std::isfinite(s.rho_min)||!std::isfinite(s.rho_max))throw std::runtime_error("NaN/Inf detected.");
         }
-        if(it%opt.print_interval==0 || it==opt.total_steps){
+        if(opt.verbose && (it%opt.print_interval==0 || it==opt.total_steps)){
             auto now=std::chrono::steady_clock::now();double dt=std::chrono::duration<double>(now-lastprint).count();lastprint=now;
             std::cout<<std::fixed<<std::setprecision(6)<<"iter="<<std::setw(7)<<it<<" | Sat_eq="<<last.sat_equiv
                      <<" | ERliq="<<std::scientific<<std::setprecision(6)<<last_metrics[3]
@@ -648,6 +648,6 @@ NativeRunResult run_native_production(
     rr.final_mass_partition_error_rel=last_metrics[4];rr.final_bc_mass_balance_error_rel=last_metrics[5];rr.rho_min_final=last.rho_min;rr.rho_max_final=last.rho_max;
     rr.stats_csv=stats_final.u8string();
     write_done_json(outdir/"DONE.json",opt,rr);
-    std::cout<<"[DONE] stats="<<stats_final.u8string()<<"\n";
+    if(opt.verbose) std::cout<<"[DONE] stats="<<stats_final.u8string()<<"\n";
     return rr;
 }
