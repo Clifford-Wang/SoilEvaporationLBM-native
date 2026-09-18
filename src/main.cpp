@@ -15,7 +15,10 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include "cuda_stage2.hpp"
+#include <chrono>
+#include <thread>
+#include <cstdio>
+#include "native_production.hpp"
 
 namespace fs = std::filesystem;
 
@@ -169,184 +172,146 @@ static uint64_t fnv1a_u64(uint64_t h,uint64_t x){
 static uint64_t hash_i32(uint64_t h,int32_t x){return fnv1a_u64(h,static_cast<uint32_t>(x));}
 static uint64_t hash_u8(uint64_t h,uint8_t x){h^=x;h*=1099511628211ull;return h;}
 
-int main(int argc,char** argv){
-    try{
-        fs::path cfg=(argc>1?fs::path(argv[1]):fs::path("config.txt"));
-        cfg=fs::absolute(cfg);
-        auto ini=Ini::load(cfg);
 
-        const int nx=ini.geti("GRID","nx"),ny=ini.geti("GRID","ny"),nz_geo=ini.geti("GRID","nz_geo");
-        const int n_buffer=ini.geti("GRID","n_buffer"),pore_value=ini.geti("GRID","pore_value",0);
-        if(nx<=0||ny<=0||nz_geo<=0||n_buffer<0) throw std::runtime_error("Invalid GRID settings.");
-        const int nz=nz_geo+n_buffer;
-        const size_t expected=static_cast<size_t>(nx)*ny*nz_geo;
-        const float niu=static_cast<float>(ini.getd("PHYSICS","niu",0.20));
-        const float G_int=static_cast<float>(ini.getd("PHYSICS","G_int",-1.0));
-        const float beta_sc=static_cast<float>(ini.getd("PHYSICS","beta_sc",1.16));
-        const float Tr=static_cast<float>(ini.getd("PHYSICS","Tr",0.86));
-        const float rho_liq=static_cast<float>(ini.getd("PHYSICS","rho_liq",6.498946));
-        const float rho_gas=static_cast<float>(ini.getd("PHYSICS","rho_gas",0.379679));
-        const float rho_l_eq=static_cast<float>(ini.getd("PHYSICS","rho_l_eq",rho_liq));
-        const float rho_g_eq=static_cast<float>(ini.getd("PHYSICS","rho_g_eq",rho_gas));
-        const float rho_dry=static_cast<float>(ini.getd("PHYSICS","rho_dry",0.37));
-        std::stringstream gss(ini.get("PHYSICS","G_ads","-0.20"));
-        std::string gfirst; std::getline(gss,gfirst,',');
-        const float G_ads=static_cast<float>(std::stod(trim(gfirst)));
+static std::vector<double> parse_float_list(const std::string& raw){
+    std::vector<double> out;std::stringstream ss(raw);std::string x;
+    while(std::getline(ss,x,',')){x=trim(x);if(!x.empty())out.push_back(std::stod(x));}
+    if(out.empty())throw std::runtime_error("G_ads list is empty.");
+    for(double v:out)if(!std::isfinite(v))throw std::runtime_error("G_ads contains non-finite value.");
+    return out;
+}
+static std::string float_tag(double v,const std::string& prefix){
+    std::ostringstream os;os<<std::fixed<<std::setprecision(6)<<std::abs(v);std::string s=os.str();
+    while(!s.empty()&&s.back()=='0')s.pop_back();if(!s.empty()&&s.back()=='.')s.pop_back();
+    std::replace(s.begin(),s.end(),'.','p');return prefix+"_"+(v>=0?"p":"m")+s;
+}
+static uint64_t fnv_file(const fs::path& p){
+    std::ifstream in(p,std::ios::binary);if(!in)throw std::runtime_error("Cannot hash file: "+path_utf8(p));
+    uint64_t h=1469598103934665603ull;char b[1<<16];
+    while(in){in.read(b,sizeof(b));auto n=in.gcount();for(std::streamsize i=0;i<n;++i){h^=(uint8_t)b[i];h*=1099511628211ull;}}
+    return h;
+}
+static std::string hex64(uint64_t x){std::ostringstream o;o<<std::hex<<std::setw(16)<<std::setfill('0')<<x;return o.str();}
+static std::string job_signature(uint64_t gh,uint64_t ph,const std::string& case_name,double gads,double rho_dry,
+                                 int nx,int ny,int nz,int nb,int pv,double niu,double gi,double beta,double tr,
+                                 double rl,double rg,double rle,double rge,const Ini& ini){
+    std::ostringstream s;s<<std::setprecision(17)
+      <<"native_v1|"<<hex64(gh)<<"|"<<hex64(ph)<<"|"<<case_name<<"|"<<gads<<"|"<<rho_dry<<"|"
+      <<nx<<"|"<<ny<<"|"<<nz<<"|"<<nb<<"|"<<pv<<"|"<<niu<<"|"<<gi<<"|"<<beta<<"|"<<tr<<"|"<<rl<<"|"<<rg<<"|"<<rle<<"|"<<rge<<"|"
+      <<ini.geti("RUN","total_steps")<<"|"<<ini.geti("RUN","record_interval")<<"|"<<ini.geti("RUN","vtk_interval")<<"|"<<ini.geti("RUN","checkpoint_interval");
+    uint64_t h=1469598103934665603ull;auto z=s.str();for(unsigned char c:z){h^=c;h*=1099511628211ull;}return hex64(h);
+}
+static bool file_text_contains(const fs::path& p,const std::string& needle){
+    if(!fs::exists(p))return false;std::ifstream in(p,std::ios::binary);std::string s((std::istreambuf_iterator<char>(in)),{});return s.find(needle)!=std::string::npos;
+}
+static std::string time_tag(){
+    auto t=std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm,&t);
+#else
+    localtime_r(&t,&tm);
+#endif
+    std::ostringstream o;o<<std::put_time(&tm,"%Y%m%d-%H%M%S");return o.str();
+}
+static void archive_dir_if_needed(const fs::path& dir,const std::string& sig,bool force){
+    if(!fs::exists(dir))return;
+    fs::path sf=dir/"run_signature.txt";
+    bool same=false;if(fs::exists(sf)){std::ifstream in(sf);std::string old;std::getline(in,old);same=(trim(old)==sig);}
+    if(!force&&same)return;
+    fs::path dst=dir;dst+=std::string("__archive_")+(force?"force_":"config_")+time_tag();
+    int k=1;while(fs::exists(dst)){dst=dir;dst+=std::string("__archive_")+time_tag()+"_"+std::to_string(k++);}
+    fs::rename(dir,dst);
+    std::cout<<"[Archive] "<<path_utf8(dst)<<"\n";
+}
+static void write_signature(const fs::path& dir,const std::string& sig){fs::create_directories(dir);std::ofstream(dir/"run_signature.txt")<<sig<<"\n";}
+
+int main(int argc,char** argv){
+    int pause_when_finished=0;
+    try{
+        fs::path cfg=(argc>1?utf8_path(argv[1]):utf8_path("config.txt"));cfg=fs::absolute(cfg);
+        auto ini=Ini::load(cfg);pause_when_finished=ini.geti("CONTROL","pause_when_finished",1);
+        const int nx=ini.geti("GRID","nx"),ny=ini.geti("GRID","ny"),nz_geo=ini.geti("GRID","nz_geo"),n_buffer=ini.geti("GRID","n_buffer"),pore_value=ini.geti("GRID","pore_value",0);
+        if(nx<=0||ny<=0||nz_geo<=0||n_buffer<0)throw std::runtime_error("Invalid GRID settings.");
+        const size_t expected=(size_t)nx*ny*nz_geo;const int nz=nz_geo+n_buffer;
+        const double niu=ini.getd("PHYSICS","niu",0.20),G_int=ini.getd("PHYSICS","G_int",-1.0),beta=ini.getd("PHYSICS","beta_sc",1.16),Tr=ini.getd("PHYSICS","Tr",0.86);
+        const double rho_liq=ini.getd("PHYSICS","rho_liq",6.498946),rho_gas=ini.getd("PHYSICS","rho_gas",0.379679),rho_l_eq=ini.getd("PHYSICS","rho_l_eq",rho_liq),rho_g_eq=ini.getd("PHYSICS","rho_g_eq",rho_gas),rho_dry=ini.getd("PHYSICS","rho_dry",0.37);
+        auto gads_values=parse_float_list(ini.get("PHYSICS","G_ads","-0.20"));
+        if(rho_dry<=0||rho_l_eq<=rho_g_eq)throw std::runtime_error("Invalid density settings.");
+
+        const int total_steps=ini.geti("RUN","total_steps",200000),record_interval=ini.geti("RUN","record_interval",1000),print_interval=ini.geti("RUN","print_interval",1000);
+        const int vtk_interval=ini.geti("RUN","vtk_interval",10000),checkpoint_interval=ini.geti("RUN","checkpoint_interval",100000),keep_ck=ini.geti("RUN","keep_checkpoints",2),save_vtk=ini.geti("RUN","save_vtk",1);
+        const double memfrac=ini.getd("RUN","device_memory_fraction",0.86),wait_seconds=ini.getd("RUN","wait_seconds",3.0);
+        const int force=ini.geti("CONTROL","force",0),dry_run=ini.geti("CONTROL","dry_run",0);
 
         auto geo_root=resolve_path(cfg,ini.get("PATHS","geometry_root"));
         auto phase_file=resolve_path(cfg,ini.get("PATHS","phase_file"));
+        auto output_root=resolve_path(cfg,ini.get("PATHS","output_root","result"));
         auto pattern=ini.get("PATHS","geometry_pattern","**/*_connected_Z_THROUGH*.txt");
-        auto only=parse_names(ini.get("SAMPLES","only"));
-        auto exclude=parse_names(ini.get("SAMPLES","exclude"));
-        auto cases=find_cases(geo_root,pattern,only,exclude);
-        if(cases.empty()){
-            std::ostringstream os;
-            os<<"No geometry matched current config.\n";
-            os<<"  geometry_root = "<<path_utf8(geo_root)<<"\n";
-            os<<"  pattern       = "<<pattern<<"\n";
-            os<<"  only          = "<<ini.get("SAMPLES","only")<<"\n";
-            os<<"  visible txt files (first 10):\n";
-            int shown=0;
-            for(const auto& e:fs::recursive_directory_iterator(geo_root)){
-                if(!e.is_regular_file()) continue;
-                if(e.path().extension()!=".txt" && e.path().extension()!=".TXT") continue;
-                os<<"    "<<path_utf8(fs::relative(e.path(),geo_root))<<"\n";
-                if(++shown>=10) break;
-            }
-            throw std::runtime_error(os.str());
+        auto only=parse_names(ini.get("SAMPLES","only")),exclude=parse_names(ini.get("SAMPLES","exclude"));
+        auto cases=find_cases(geo_root,pattern,only,exclude);if(cases.empty())throw std::runtime_error("No geometry matched current config.");
+        auto phase=load_doubles(phase_file,expected);uint64_t phase_hash=fnv_file(phase_file);
+        fs::create_directories(output_root);
+
+        std::cout<<"####################################################################################################\n";
+        std::cout<<"SoilEvaporationLBM Native CUDA | no Python/Taichi runtime\n";
+        std::cout<<"Config        = "<<path_utf8(cfg)<<"\nGeometry root = "<<path_utf8(geo_root)<<"\nPhase file    = "<<path_utf8(phase_file)<<"\nOutput root   = "<<path_utf8(output_root)<<"\n";
+        std::cout<<"Samples       = "<<cases.size()<<"\nG_ads list    = [";for(size_t i=0;i<gads_values.size();++i){if(i)std::cout<<",";std::cout<<gads_values[i];}std::cout<<"]\n";
+        std::cout<<"Total jobs    = "<<cases.size()*gads_values.size()<<"\n";
+        std::cout<<"####################################################################################################\n";
+        if(dry_run){
+            int k=0;for(auto& gp:cases)for(double ga:gads_values){auto cn=extract_case_name(gp);std::cout<<++k<<". "<<cn<<" | Gads="<<ga<<" | "<<path_utf8(output_root/utf8_path(cn)/utf8_path(float_tag(ga,"Gads")))<<"\n";}
+            if(pause_when_finished){std::cout<<"Press Enter to exit...";std::cin.get();}return 0;
         }
-        if(cases.size()!=1){
-            std::ostringstream os;os<<"Stage-1 validation expects exactly one selected geometry; matched "<<cases.size()<<":\n";
-            for(auto&p:cases)os<<"  "<<path_utf8(p)<<"\n";
-            throw std::runtime_error(os.str());
-        }
-        auto geo_file=cases.front();
-        auto case_name=extract_case_name(geo_file);
 
-        std::cout<<"================================================================================\n";
-        std::cout<<"SoilEvaporationLBM native Stage-2 CUDA initialization/force validator\n";
-        std::cout<<"================================================================================\n";
-        std::cout<<"Config    : "<<path_utf8(cfg)<<"\n";
-        std::cout<<"Case      : "<<case_name<<"\n";
-        std::cout<<"Geometry  : "<<path_utf8(geo_file)<<"\n";
-        std::cout<<"Phase     : "<<path_utf8(phase_file)<<"\n";
-        std::cout<<"Grid      : "<<nx<<" x "<<ny<<" x "<<nz_geo<<" + buffer "<<n_buffer<<"\n";
+        struct Summary{std::string case_name,status,output;double gads=0,sat=0,er=0,js=0,jt=0,bcr=0,rmin=0,rmax=0,wall=0;};
+        std::vector<Summary> summary;int success=0,skipped=0,failed=0;int jobno=0,totaljobs=(int)(cases.size()*gads_values.size());
 
-        auto gf=load_ints(geo_file,expected);
-        auto pf=load_doubles(phase_file,expected);
-        std::map<long long,size_t> counts;
-        size_t n_real_pore=0,n_liq=0;
-        std::vector<uint8_t> solid(static_cast<size_t>(nx)*ny*nz,1);
-        std::vector<uint8_t> buffer(static_cast<size_t>(nx)*ny*nz,0);
+        static const int ev[19][3]={{0,0,0},{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1},{1,1,0},{-1,-1,0},{1,-1,0},{-1,1,0},{1,0,1},{-1,0,-1},{1,0,-1},{-1,0,1},{0,1,1},{0,-1,-1},{0,1,-1},{0,-1,1}};
 
-        for(int k=0;k<nz_geo;++k)for(int j=0;j<ny;++j)for(int i=0;i<nx;++i){
-            size_t ff=flatF(i,j,k,nx,ny); counts[gf[ff]]++;
-            bool pore=(gf[ff]==pore_value);
-            solid[idx3(i,j,k,nx,ny,nz)]=pore?0:1;
-            if(pore){++n_real_pore;if(pf[ff]>0.5)++n_liq;}
-        }
-        if(n_buffer>0){
-            for(int i=0;i<nx;++i)for(int j=0;j<ny;++j)for(int k=nz_geo;k<nz;++k){
-                solid[idx3(i,j,k,nx,ny,nz)]=0; buffer[idx3(i,j,k,nx,ny,nz)]=1;
-            }
-        }
-        size_t n_gas=n_real_pore-n_liq;
-        size_t n_buffer_nodes=static_cast<size_t>(nx)*ny*n_buffer;
-        size_t n_fluid=n_real_pore+n_buffer_nodes;
+        for(const auto& geo_file:cases){
+            const std::string case_name=extract_case_name(geo_file);auto gf=load_ints(geo_file,expected);uint64_t geo_hash=fnv_file(geo_file);
+            std::vector<uint8_t> solid((size_t)nx*ny*nz,1),buffer((size_t)nx*ny*nz,0);size_t nreal=0,nliq=0;
+            for(int k=0;k<nz_geo;++k)for(int j=0;j<ny;++j)for(int i=0;i<nx;++i){size_t ff=flatF(i,j,k,nx,ny);bool pore=(gf[ff]==pore_value);solid[idx3(i,j,k,nx,ny,nz)]=pore?0:1;if(pore){++nreal;if(phase[ff]>0.5)++nliq;}}
+            if(n_buffer>0)for(int i=0;i<nx;++i)for(int j=0;j<ny;++j)for(int k=nz_geo;k<nz;++k){solid[idx3(i,j,k,nx,ny,nz)]=0;buffer[idx3(i,j,k,nx,ny,nz)]=1;}
+            size_t nfluid=nreal+(size_t)nx*ny*n_buffer;
+            std::vector<std::array<int32_t,3>> xyz;xyz.reserve(nfluid);std::vector<int32_t> grid((size_t)nx*ny*nz,-1);
+            for(int i=0;i<nx;++i)for(int j=0;j<ny;++j)for(int k=0;k<nz;++k)if(!solid[idx3(i,j,k,nx,ny,nz)]){int id=(int)xyz.size();xyz.push_back({i,j,k});grid[idx3(i,j,k,nx,ny,nz)]=id;}
+            if(xyz.size()!=nfluid)throw std::runtime_error("Sparse mapping size mismatch.");
+            std::vector<int32_t> pull(nfluid*19),ffnb(nfluid*19),ads(nfluid*19);
+            for(size_t id=0;id<nfluid;++id){int i=xyz[id][0],j=xyz[id][1],k=xyz[id][2];for(int q=0;q<19;++q){size_t o=id*19+q;
+                int si=wrap(i-ev[q][0],nx),sj=wrap(j-ev[q][1],ny),sk=k-ev[q][2];
+                if(sk<0||sk>=nz)pull[o]=-2;else if(!solid[idx3(si,sj,sk,nx,ny,nz)])pull[o]=grid[idx3(si,sj,sk,nx,ny,nz)];else pull[o]=-1;
+                int ni=wrap(i+ev[q][0],nx),nj=wrap(j+ev[q][1],ny),nk=k+ev[q][2];ads[o]=0;
+                if(nk<0||nk>=nz)ffnb[o]=-1;else if(!solid[idx3(ni,nj,nk,nx,ny,nz)])ffnb[o]=grid[idx3(ni,nj,nk,nx,ny,nz)];else{ffnb[o]=-1;ads[o]=1;}
+            }}
+            std::vector<float> rho_init(nfluid,(float)rho_dry);for(size_t id=0;id<nfluid;++id){int i=xyz[id][0],j=xyz[id][1],k=xyz[id][2];if(k<nz_geo)rho_init[id]=(phase[flatF(i,j,k,nx,ny)]>0.5)?(float)rho_liq:(float)rho_gas;}
+            std::cout<<"[Geometry] "<<case_name<<" pores="<<nreal<<" phi="<<std::fixed<<std::setprecision(6)<<(double)nreal/expected<<" liquid_init="<<nliq<<" n_fluid="<<nfluid<<"\n";
 
-        std::cout<<"[Geometry] value counts = {";
-        bool first=true;for(auto&kv:counts){if(!first)std::cout<<", ";first=false;std::cout<<kv.first<<": "<<kv.second;}std::cout<<"}\n";
-        std::cout<<"[Geometry] pore_value   = "<<pore_value<<"\n";
-        std::cout<<"[Geometry] real pore nodes = "<<n_real_pore<<"\n";
-        std::cout<<std::fixed<<std::setprecision(9)<<"[Geometry] real porosity   = "<<(double)n_real_pore/(double)expected<<"\n";
-        std::cout<<"[Phase] initial liquid pore nodes = "<<n_liq<<"\n";
-        std::cout<<"[Phase] initial gas pore nodes    = "<<n_gas<<"\n";
-        std::cout<<"[Sparse] buffer nodes = "<<n_buffer_nodes<<"\n";
-        std::cout<<"[Sparse] n_fluid      = "<<n_fluid<<"\n";
-
-        std::vector<std::array<int32_t,3>> fluid_xyz; fluid_xyz.reserve(n_fluid);
-        std::vector<int32_t> grid_to_idx(static_cast<size_t>(nx)*ny*nz,-1);
-        for(int i=0;i<nx;++i)for(int j=0;j<ny;++j)for(int k=0;k<nz;++k){
-            if(solid[idx3(i,j,k,nx,ny,nz)]==0){
-                int32_t id=static_cast<int32_t>(fluid_xyz.size());
-                fluid_xyz.push_back({i,j,k}); grid_to_idx[idx3(i,j,k,nx,ny,nz)]=id;
-            }
-        }
-        if(fluid_xyz.size()!=n_fluid) throw std::runtime_error("n_fluid mismatch after mapping.");
-
-        static const int e[19][3]={
-            {0,0,0},{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1},
-            {1,1,0},{-1,-1,0},{1,-1,0},{-1,1,0},{1,0,1},{-1,0,-1},{1,0,-1},{-1,0,1},
-            {0,1,1},{0,-1,-1},{0,1,-1},{0,-1,1}
-        };
-        uint64_t h_pull=1469598103934665603ull,h_ff=h_pull,h_ads=h_pull,h_solid=h_pull,h_xyz=h_pull,h_grid=h_pull;
-        uint64_t pull_fluid=0,pull_solid=0,pull_oob=0,ff_fluid=0,ff_solid=0,ff_oob=0;
-        for(auto&xyz:fluid_xyz){h_xyz=hash_i32(h_xyz,xyz[0]);h_xyz=hash_i32(h_xyz,xyz[1]);h_xyz=hash_i32(h_xyz,xyz[2]);}
-        for(int32_t x:grid_to_idx)h_grid=hash_i32(h_grid,x);
-
-        std::vector<int32_t> pull_nb(n_fluid*19);
-        std::vector<int32_t> is_solid_nb(n_fluid*19);
-        std::vector<int32_t> ff_nb(n_fluid*19);
-        std::vector<int32_t> ads_solid_nb(n_fluid*19);
-
-        for(size_t id=0;id<fluid_xyz.size();++id){
-            int i=fluid_xyz[id][0],j=fluid_xyz[id][1],k=fluid_xyz[id][2];
-            for(int q=0;q<19;++q){
-                const size_t off=id*19+q;
-                int src_i=wrap(i-e[q][0],nx),src_j=wrap(j-e[q][1],ny),src_k=k-e[q][2];
-                int32_t pull; int32_t is_solid=0;
-                if(src_k<0||src_k>=nz){pull=-2;++pull_oob;}
-                else if(solid[idx3(src_i,src_j,src_k,nx,ny,nz)]==0){pull=grid_to_idx[idx3(src_i,src_j,src_k,nx,ny,nz)];++pull_fluid;}
-                else{pull=-1;is_solid=1;++pull_solid;}
-                pull_nb[off]=pull; is_solid_nb[off]=is_solid;
-                h_pull=hash_i32(h_pull,pull);h_solid=hash_u8(h_solid,static_cast<uint8_t>(is_solid));
-
-                int ni=wrap(i+e[q][0],nx),nj=wrap(j+e[q][1],ny),nk=k+e[q][2];
-                int32_t ff; int32_t ads=0;
-                if(nk<0||nk>=nz){ff=-1;++ff_oob;}
-                else if(solid[idx3(ni,nj,nk,nx,ny,nz)]==0){ff=grid_to_idx[idx3(ni,nj,nk,nx,ny,nz)];++ff_fluid;}
-                else{ff=-1;ads=1;++ff_solid;}
-                ff_nb[off]=ff; ads_solid_nb[off]=ads;
-                h_ff=hash_i32(h_ff,ff);h_ads=hash_u8(h_ads,static_cast<uint8_t>(ads));
+            for(double gads:gads_values){
+                ++jobno;fs::path outdir=output_root/utf8_path(case_name)/utf8_path(float_tag(gads,"Gads"));
+                std::string sig=job_signature(geo_hash,phase_hash,case_name,gads,rho_dry,nx,ny,nz_geo,n_buffer,pore_value,niu,G_int,beta,Tr,rho_liq,rho_gas,rho_l_eq,rho_g_eq,ini);
+                bool done_same=fs::exists(outdir/"DONE.json")&&file_text_contains(outdir/"DONE.json","\"signature\":\""+sig+"\"")&&file_text_contains(outdir/"DONE.json","\"total_steps\":"+std::to_string(total_steps));
+                std::cout<<"\n====================================================================================================\n[Batch "<<jobno<<"/"<<totaljobs<<"] "<<case_name<<" | Gads="<<std::showpos<<std::fixed<<std::setprecision(6)<<gads<<std::noshowpos<<"\n====================================================================================================\n";
+                if(done_same&&!force){std::cout<<"[Batch] completed configuration matches; skipped.\n";++skipped;summary.push_back({case_name,"SKIPPED",path_utf8(outdir),gads});continue;}
+                try{
+                    archive_dir_if_needed(outdir,sig,force!=0);fs::create_directories(outdir);write_signature(outdir,sig);
+                    NativeRunOptions opt;opt.total_steps=total_steps;opt.record_interval=record_interval;opt.print_interval=print_interval;opt.vtk_interval=vtk_interval;opt.checkpoint_interval=checkpoint_interval;opt.keep_checkpoints=keep_ck;opt.save_vtk=save_vtk;opt.device_memory_fraction=memfrac;opt.force=force;
+                    opt.case_name=case_name;opt.output_dir=path_utf8(outdir);opt.output_prefix=case_name+"_"+float_tag(gads,"Gads")+"_"+float_tag(rho_dry,"RhoDry")+"_";opt.signature=sig;
+                    auto rr=run_native_production(nx,ny,nz_geo,n_buffer,(float)niu,(float)G_int,(float)beta,(float)Tr,(float)gads,(float)rho_liq,(float)rho_gas,(float)rho_l_eq,(float)rho_g_eq,(float)rho_dry,xyz,grid,pull,ffnb,ads,rho_init,solid,buffer,opt);
+                    ++success;summary.push_back({case_name,"DONE",path_utf8(outdir),gads,rr.final_saturation_equiv,rr.final_ER_liquid_equiv_lu,rr.final_J_soil_lu,rr.final_J_top_direct_lu,rr.final_bc_mass_balance_error_rel,rr.rho_min_final,rr.rho_max_final,rr.wall_time_sec});
+                }catch(const std::exception& ex){++failed;summary.push_back({case_name,std::string("FAILED: ")+ex.what(),path_utf8(outdir),gads});std::cerr<<"[Batch][FAILED] "<<ex.what()<<"\n";}
+                if(jobno<totaljobs&&wait_seconds>0)std::this_thread::sleep_for(std::chrono::duration<double>(wait_seconds));
             }
         }
 
-        auto hex=[](uint64_t x){std::ostringstream o;o<<std::hex<<std::setw(16)<<std::setfill('0')<<x;return o.str();};
-        std::cout<<"[Hash] fluid_xyz      = "<<hex(h_xyz)<<"\n";
-        std::cout<<"[Hash] grid_to_idx     = "<<hex(h_grid)<<"\n";
-        std::cout<<"[Hash] pull_nb_list    = "<<hex(h_pull)<<"\n";
-        std::cout<<"[Hash] is_solid_nb     = "<<hex(h_solid)<<"\n";
-        std::cout<<"[Hash] ff_nb_list      = "<<hex(h_ff)<<"\n";
-        std::cout<<"[Hash] ads_solid_nb    = "<<hex(h_ads)<<"\n";
-        std::cout<<"[Neighbor] pull fluid/solid/oob = "<<pull_fluid<<" / "<<pull_solid<<" / "<<pull_oob<<"\n";
-        std::cout<<"[Neighbor] ff   fluid/solid/oob = "<<ff_fluid<<" / "<<ff_solid<<" / "<<ff_oob<<"\n";
-        std::cout<<"[Sample] first fluid_xyz = ("<<fluid_xyz.front()[0]<<","<<fluid_xyz.front()[1]<<","<<fluid_xyz.front()[2]<<")\n";
-        std::cout<<"[Sample] last  fluid_xyz = ("<<fluid_xyz.back()[0]<<","<<fluid_xyz.back()[1]<<","<<fluid_xyz.back()[2]<<")\n";
-
-        std::vector<float> rho_init(n_fluid,rho_dry);
-        for(size_t id=0;id<fluid_xyz.size();++id){
-            const int i=fluid_xyz[id][0],j=fluid_xyz[id][1],k=fluid_xyz[id][2];
-            if(k<nz_geo){
-                const bool liquid=(pf[flatF(i,j,k,nx,ny)]>0.5);
-                rho_init[id]=liquid?rho_liq:rho_gas;
-            }
-        }
-
-        std::cout<<"--------------------------------------------------------------------------------\n";
-        std::cout<<"[CUDA] Stage-2: initialization + PR-EOS/psi + Shan-Chen/adsorption force\n";
-        std::cout<<"--------------------------------------------------------------------------------\n";
-        run_cuda_stage2(
-            nx,ny,nz_geo,n_buffer,
-            niu,G_int,beta_sc,Tr,G_ads,
-            rho_liq,rho_gas,rho_l_eq,rho_g_eq,rho_dry,
-            fluid_xyz,grid_to_idx,pull_nb,is_solid_nb,ff_nb,ads_solid_nb,rho_init
-        );
-        std::cout<<"================================================================================\n";
-        std::cout<<"[PASS] Native Stage-2 CUDA validation completed. No Python/Taichi used.\n";
-        std::cout<<"================================================================================\n";
-        return 0;
+        fs::path sumfile=output_root/"batch_summary.csv";std::ofstream so(sumfile);so<<"case_name,G_ADS,status,final_saturation_equiv,final_ER_liquid_equiv_lu,final_J_soil_lu,final_J_top_direct_lu,final_bc_mass_balance_error_rel,rho_min_final,rho_max_final,wall_time_sec,output_dir\n";
+        for(auto&r:summary)so<<r.case_name<<","<<std::setprecision(17)<<r.gads<<","<<r.status<<","<<r.sat<<","<<r.er<<","<<r.js<<","<<r.jt<<","<<r.bcr<<","<<r.rmin<<","<<r.rmax<<","<<r.wall<<","<<r.output<<"\n";
+        std::cout<<"\n####################################################################################################\n[Batch] ALL DONE\n[Batch] success="<<success<<"\n[Batch] skipped="<<skipped<<"\n[Batch] failed="<<failed<<"\n[Batch] summary="<<path_utf8(sumfile)<<"\n####################################################################################################\n";
+        if(pause_when_finished){std::cout<<"Press Enter to exit...";std::cin.get();}
+        return failed?1:0;
     }catch(const std::exception& e){
-        std::cerr<<"\n[ERROR] "<<e.what()<<"\n";
+        std::cerr<<"\n[FATAL] "<<e.what()<<"\n";
+        if(pause_when_finished){std::cout<<"Press Enter to exit...";std::cin.get();}
         return 1;
     }
 }
