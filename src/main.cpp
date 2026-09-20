@@ -314,6 +314,8 @@ int main(int argc,char** argv){
                     auto rr=run_native_production(nx,ny,nz_geo,n_buffer,(float)niu,(float)G_int,(float)beta,(float)Tr,(float)gads,(float)rho_liq,(float)rho_gas,(float)rho_l_eq,(float)rho_g_eq,(float)rho_dry,xyz,grid,pull,ffnb,ads,rho_init,solid,buffer,opt);
                     ++success;summary.push_back({case_name,"DONE",path_utf8(outdir),gads,rr.final_saturation_equiv,rr.final_ER_liquid_equiv_lu,rr.final_J_soil_lu,rr.final_J_top_direct_lu,rr.final_bc_mass_balance_error_rel,rr.rho_min_final,rr.rho_max_final,rr.wall_time_sec});
                     if(!verbose) std::cout<<"SUCCESS: "<<case_name<<" | Gads="<<gads<<"\n";
+                }catch(const trial_guard::TrialViolation&){
+                    throw;
                 }catch(const std::exception& ex){
                     ++failed;summary.push_back({case_name,std::string("FAILED: ")+ex.what(),path_utf8(outdir),gads});
                     if(verbose) std::cerr<<"[Batch][FAILED] "<<ex.what()<<"\n";
