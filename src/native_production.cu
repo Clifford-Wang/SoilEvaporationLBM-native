@@ -1,4 +1,5 @@
 #include "native_production.hpp"
+#include "trial_guard.hpp"
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cmath>
@@ -605,6 +606,7 @@ NativeRunResult run_native_production(
     auto t0=std::chrono::steady_clock::now(),lastprint=t0;
     std::array<double,10> last_metrics{};
     for(int it=start_step+1;it<=opt.total_steps;++it){
+        if(it==start_step+1 || it%1000==0) trial_guard::heartbeat_or_throw();
         k_macro<<<GS,BS>>>(p,d.f,d.fx,d.fy,d.fz,d.rho,d.vx,d.vy,d.vz);
         k_pressure_psi<<<GS,BS>>>(p,d.rho,d.pressure,d.psi);
         k_force<<<GS,BS>>>(p,d.xyz,d.grid,d.ff,d.ads,d.psi,d.fx,d.fy,d.fz);
