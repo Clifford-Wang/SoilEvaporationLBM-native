@@ -41,7 +41,7 @@ jobs:
         id: noniso
         shell: pwsh
         run: |
-          if (Test-Path ".private/noniso_source.enc") {
+          if (Test-Path ".private/noniso/part00") {
             "present=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           } else {
             "present=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -56,13 +56,14 @@ jobs:
           set -euo pipefail
           test -n "${NONISO_BUILD_KEY:-}"
           mkdir -p .noniso_build
+          cat .private/noniso/part* | base64 -d > .noniso_build/noniso_source.enc
           if command -v openssl >/dev/null 2>&1; then
             OPENSSL=openssl
           else
             OPENSSL="/c/Program Files/Git/usr/bin/openssl.exe"
           fi
           "$OPENSSL" enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
-            -in .private/noniso_source.enc \
+            -in .noniso_build/noniso_source.enc \
             -out .noniso_build/private_noniso_native.cu \
             -pass env:NONISO_BUILD_KEY
           test -s .noniso_build/private_noniso_native.cu
@@ -96,12 +97,6 @@ jobs:
             Copy-Item build\Release\SoilEvaporationLBM_NonIsothermal.exe dist\
           }
           Copy-Item config.txt dist\
-          @'
-          @echo off
-          chcp 65001 >nul
-          cd /d "%~dp0"
-          SoilEvaporationLBM.exe config.txt
-          '@ | Set-Content -Encoding ASCII dist\run.bat
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
