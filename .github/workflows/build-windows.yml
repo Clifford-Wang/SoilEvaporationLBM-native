@@ -73,18 +73,27 @@ jobs:
         if: steps.noniso.outputs.present == 'true'
         shell: pwsh
         run: |
-          nvcc .noniso_build\private_noniso_native.cu src\trial_guard.cpp `
-            -std=c++17 -O3 --use-local-env --cudart static `
-            -Iinclude `
-            -Xcompiler="/O2 /EHsc /utf-8 /MT" `
-            -gencode=arch=compute_75,code=sm_75 `
-            -gencode=arch=compute_80,code=sm_80 `
-            -gencode=arch=compute_86,code=sm_86 `
-            -gencode=arch=compute_89,code=sm_89 `
-            -gencode=arch=compute_90,code=sm_90 `
-            -gencode=arch=compute_120,code=sm_120 `
-            advapi32.lib crypt32.lib `
-            -o build\Release\SoilEvaporationLBM_NonIsothermal.exe
+          $nvccArgs = @(
+            ".noniso_build\private_noniso_native.cu",
+            "src\trial_guard.cpp",
+            "-std=c++17",
+            "-O3",
+            "--use-local-env",
+            "--cudart", "static",
+            "-Iinclude",
+            "-Xcompiler=/O2,/EHsc,/utf-8,/MT",
+            "-gencode=arch=compute_75,code=sm_75",
+            "-gencode=arch=compute_80,code=sm_80",
+            "-gencode=arch=compute_86,code=sm_86",
+            "-gencode=arch=compute_89,code=sm_89",
+            "-gencode=arch=compute_90,code=sm_90",
+            "-gencode=arch=compute_120,code=sm_120",
+            "advapi32.lib",
+            "crypt32.lib",
+            "-o", "build\Release\SoilEvaporationLBM_NonIsothermal.exe"
+          )
+          & nvcc @nvccArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (!(Test-Path build\Release\SoilEvaporationLBM_NonIsothermal.exe)) {
             throw "Non-isothermal executable was not produced."
           }
