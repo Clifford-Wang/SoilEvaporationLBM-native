@@ -2,6 +2,8 @@ name: Build Windows Native Release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
 
 permissions:
   contents: read
@@ -31,15 +33,68 @@ jobs:
         shell: pwsh
         run: cmake -S . -B build -A x64
 
-      - name: Build Release
+      - name: Build isothermal Release
         shell: pwsh
         run: cmake --build build --config Release --parallel
+
+      - name: Detect private non-isothermal build input
+        id: noniso
+        shell: pwsh
+        run: |
+          if (Test-Path ".private/noniso_source.enc") {
+            "present=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } else {
+            "present=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+      - name: Decrypt private non-isothermal CUDA source
+        if: steps.noniso.outputs.present == 'true'
+        shell: bash
+        env:
+          NONISO_BUILD_KEY: ${{ secrets.NONISO_BUILD_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${NONISO_BUILD_KEY:-}"
+          mkdir -p .noniso_build
+          if command -v openssl >/dev/null 2>&1; then
+            OPENSSL=openssl
+          else
+            OPENSSL="/c/Program Files/Git/usr/bin/openssl.exe"
+          fi
+          "$OPENSSL" enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in .private/noniso_source.enc \
+            -out .noniso_build/private_noniso_native.cu \
+            -pass env:NONISO_BUILD_KEY
+          test -s .noniso_build/private_noniso_native.cu
+
+      - name: Build non-isothermal native CUDA EXE
+        if: steps.noniso.outputs.present == 'true'
+        shell: pwsh
+        run: |
+          nvcc .noniso_build\private_noniso_native.cu src\trial_guard.cpp `
+            -std=c++17 -O3 --use-local-env --cudart static `
+            -Iinclude `
+            -Xcompiler="/O2 /EHsc /utf-8 /MT" `
+            -gencode=arch=compute_75,code=sm_75 `
+            -gencode=arch=compute_80,code=sm_80 `
+            -gencode=arch=compute_86,code=sm_86 `
+            -gencode=arch=compute_89,code=sm_89 `
+            -gencode=arch=compute_90,code=sm_90 `
+            -gencode=arch=compute_120,code=sm_120 `
+            advapi32.lib crypt32.lib `
+            -o build\Release\SoilEvaporationLBM_NonIsothermal.exe
+          if (!(Test-Path build\Release\SoilEvaporationLBM_NonIsothermal.exe)) {
+            throw "Non-isothermal executable was not produced."
+          }
 
       - name: Prepare artifact
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build\Release\SoilEvaporationLBM.exe dist\
+          if (Test-Path build\Release\SoilEvaporationLBM_NonIsothermal.exe) {
+            Copy-Item build\Release\SoilEvaporationLBM_NonIsothermal.exe dist\
+          }
           Copy-Item config.txt dist\
           @'
           @echo off
