@@ -73,14 +73,22 @@ jobs:
         if: steps.noniso.outputs.present == 'true'
         shell: pwsh
         run: |
+          $cl = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if ($null -eq $cl) { throw "MSVC cl.exe not found." }
+          $ccbin = Split-Path $cl.FullName -Parent
+          Write-Host "MSVC host compiler: $ccbin"
+          $buildUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
           $nvccArgs = @(
             ".noniso_build\private_noniso_native.cu",
             "src\trial_guard.cpp",
             "-std=c++17",
             "-O3",
             "--use-local-env",
+            "--compiler-bindir", $ccbin,
             "--cudart", "static",
             "-Iinclude",
+            "-DSOIL_LBM_BUILD_UNIX=$buildUnix",
             "-Xcompiler=/O2,/EHsc,/utf-8,/MT",
             "-gencode=arch=compute_75,code=sm_75",
             "-gencode=arch=compute_80,code=sm_80",
