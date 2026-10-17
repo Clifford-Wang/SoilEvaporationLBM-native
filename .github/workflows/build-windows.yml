@@ -64,8 +64,9 @@ jobs:
           fi
           "$OPENSSL" enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
             -in .noniso_build/noniso_source.enc \
-            -out .noniso_build/private_noniso_native.cu \
+            -out .noniso_build/private_noniso_native.cu.gz \
             -pass env:NONISO_BUILD_KEY
+          gzip -dc .noniso_build/private_noniso_native.cu.gz > .noniso_build/private_noniso_native.cu
           test -s .noniso_build/private_noniso_native.cu
 
       - name: Build non-isothermal native CUDA EXE
