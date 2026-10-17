@@ -33,15 +33,71 @@ jobs:
         shell: pwsh
         run: cmake -S . -B build -A x64
 
-      - name: Build Release
+      - name: Build isothermal Release
         shell: pwsh
         run: cmake --build build --config Release --parallel
+
+      - name: Detect private non-isothermal build input
+        id: noniso
+        shell: pwsh
+        run: |
+          if (Test-Path ".private/noniso_source.enc") {
+            "present=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } else {
+            "present=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+      - name: Decrypt private non-isothermal CUDA source
+        if: steps.noniso.outputs.present == 'true'
+        shell: bash
+        env:
+          NONISO_BUILD_KEY: ${{ secrets.NONISO_BUILD_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NONISO_BUILD_KEY:-}" ]; then
+            echo "::error::Repository secret NONISO_BUILD_KEY is required for the private non-isothermal build."
+            exit 1
+          fi
+          mkdir -p .noniso_build
+          if command -v openssl >/dev/null 2>&1; then
+            OPENSSL=openssl
+          else
+            OPENSSL="/c/Program Files/Git/usr/bin/openssl.exe"
+          fi
+          "$OPENSSL" enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in .private/noniso_source.enc \
+            -out .noniso_build/private_noniso_native.cu \
+            -pass env:NONISO_BUILD_KEY
+          test -s .noniso_build/private_noniso_native.cu
+
+      - name: Build non-isothermal native CUDA EXE
+        if: steps.noniso.outputs.present == 'true'
+        shell: pwsh
+        run: |
+          nvcc .noniso_build\private_noniso_native.cu `
+            -std=c++17 -O3 --use-local-env --cudart static `
+            -Iinclude `
+            -Xcompiler="/O2 /EHsc /utf-8 /MT" `
+            -gencode=arch=compute_75,code=sm_75 `
+            -gencode=arch=compute_80,code=sm_80 `
+            -gencode=arch=compute_86,code=sm_86 `
+            -gencode=arch=compute_89,code=sm_89 `
+            -gencode=arch=compute_90,code=sm_90 `
+            -gencode=arch=compute_120,code=sm_120 `
+            advapi32.lib crypt32.lib `
+            -o build\Release\SoilEvaporationLBM_NonIsothermal.exe
+          if (!(Test-Path build\Release\SoilEvaporationLBM_NonIsothermal.exe)) {
+            throw "Non-isothermal executable was not produced."
+          }
 
       - name: Prepare artifact
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build\Release\SoilEvaporationLBM.exe dist\
+          if (Test-Path build\Release\SoilEvaporationLBM_NonIsothermal.exe) {
+            Copy-Item build\Release\SoilEvaporationLBM_NonIsothermal.exe dist\
+          }
           Copy-Item config.txt dist\
           @'
           @echo off
@@ -62,12 +118,24 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force release | Out-Null
           Copy-Item dist\SoilEvaporationLBM.exe release\SoilEvaporationLBM.exe -Force
+          if (Test-Path dist\SoilEvaporationLBM_NonIsothermal.exe) {
+            Copy-Item dist\SoilEvaporationLBM_NonIsothermal.exe release\SoilEvaporationLBM_NonIsothermal.exe -Force
+          }
           Copy-Item dist\config.txt release\config.txt -Force
           Copy-Item dist\run.bat release\run.bat -Force
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f release/SoilEvaporationLBM.exe release/config.txt release/run.bat
+          if (Test-Path release\SoilEvaporationLBM_NonIsothermal.exe) {
+            git add -f release/SoilEvaporationLBM_NonIsothermal.exe
+          }
+
+          # The encrypted private build input is used only to build the binary.
+          # Remove it from the published branch after a successful native build.
+          if ((Test-Path ".private/noniso_source.enc") -and (Test-Path release\SoilEvaporationLBM_NonIsothermal.exe)) {
+            git rm -f .private/noniso_source.enc
+          }
 
           git diff --cached --quiet
           if ($LASTEXITCODE -eq 0) {
