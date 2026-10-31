@@ -1,0 +1,70 @@
+name: Render representative evaporation preview
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'media/representative_pore_scale_evaporation.mp4'
+      - '.github/workflows/render-representative-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest repository state
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Create README-compatible animated preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s media/representative_pore_scale_evaporation.mp4
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          fi
+          ffmpeg -nostdin -v error -y \
+            -i media/representative_pore_scale_evaporation.mp4 \
+            -filter_complex 'fps=1,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=96:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4' \
+            -loop 0 media/representative_pore_scale_evaporation.gif
+          test -s media/representative_pore_scale_evaporation.gif
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('README.md')
+          text = p.read_text(encoding='utf-8')
+          title = '## Representative visualization | 代表性模拟可视化'
+          section = '''## Representative visualization | 代表性模拟可视化
+
+          [![Representative pore-scale evaporation visualization](media/representative_pore_scale_evaporation.gif)](media/representative_pore_scale_evaporation.mp4)
+
+          三维孔隙尺度蒸发模拟的代表性可视化。点击上方动画可查看[原始 20 秒 MP4 视频](media/representative_pore_scale_evaporation.mp4)。
+
+          '''
+          if title not in text:
+              pos = text.find('## 1. ')
+              if pos == -1:
+                  text += '\n\n' + section
+              else:
+                  text = text[:pos] + section + text[pos:]
+              p.write_text(text, encoding='utf-8')
+          PY
+      - name: Publish GIF and README as Clifford
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Clifford"
+          git config user.email "167417015+Clifford-Wang@users.noreply.github.com"
+          git add media/representative_pore_scale_evaporation.gif README.md
+          if git diff --cached --quiet; then
+            echo 'Preview already current'
+            exit 0
+          fi
+          git commit -m "Show representative evaporation animation in README"
+          git pull --rebase origin main
+          git push origin HEAD:main
