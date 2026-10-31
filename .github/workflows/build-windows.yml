@@ -21,7 +21,7 @@ jobs:
           cuda: '12.8.1'
           method: 'network'
           sub-packages: '["nvcc", "cudart", "visual_studio_integration"]'
-          use-github-cache: false
+          use-github-cache: true
 
       - name: Show toolchain
         shell: pwsh
@@ -73,10 +73,16 @@ jobs:
         if: steps.noniso.outputs.present == 'true'
         shell: pwsh
         run: |
-          $cl = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe" |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          if ($null -eq $cl) { throw "MSVC cl.exe not found." }
-          $ccbin = Split-Path $cl.FullName -Parent
+          $vsDevCmd = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat"
+          if (!(Test-Path $vsDevCmd)) { throw "VsDevCmd.bat not found." }
+          cmd /s /c "`"$vsDevCmd`" -arch=x64 -host_arch=x64 && set" | ForEach-Object {
+            $pos = $_.IndexOf('=')
+            if ($pos -gt 0) {
+              [Environment]::SetEnvironmentVariable($_.Substring(0,$pos), $_.Substring($pos+1), 'Process')
+            }
+          }
+          $cl = Get-Command cl.exe -ErrorAction Stop
+          $ccbin = Split-Path $cl.Source -Parent
           Write-Host "MSVC host compiler: $ccbin"
           $buildUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
           $nvccArgs = @(
@@ -84,7 +90,6 @@ jobs:
             "src\trial_guard.cpp",
             "-std=c++17",
             "-O3",
-            "--use-local-env",
             "--compiler-bindir", $ccbin,
             "--cudart", "static",
             "-Iinclude",
