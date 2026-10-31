@@ -1,8 +1,8 @@
 # SoilEvaporationLBM Native
 
-基于 **C++17 + CUDA** 的三维孔隙尺度蒸发 LBM 程序，包含独立的**等温**与**非等温** Windows 原生 EXE。等温版本由原 Taichi 实现迁移而来；非等温版本在独立 CUDA 程序中增加温度场、热传输及潜热相关控制。运行不需要 Python/Taichi。非等温程序的明文源代码不在本仓库公开。
+本项目提供基于 **C++17 + CUDA** 的三维孔隙尺度蒸发 LBM 程序，包括独立的**等温**与**非等温** Windows 可执行版本。等温版本模拟孔隙内的两相流动与蒸发过程；非等温版本进一步考虑温度变化、热量传递及相变潜热。两个版本均可通过配置文件控制模拟条件，无需安装 Python 或 Taichi。
 
-> 本仓库公开提供可执行程序及示例配置；非等温明文源码不公开。两个版本分别使用自己的 TXT 配置和 BAT 启动脚本。程序与文档适用仓库中的 **Three-Day Evaluation License（三天试用许可）**。
+两个版本分别提供独立的 TXT 配置文件和 BAT 启动脚本。
 
 ## 1. 等温版本主要功能
 
@@ -31,7 +31,7 @@
 
 ## 2. 等温版本已完成的数值验证
 
-Native CUDA 版本已使用以下基准工况与原 Taichi 版本进行 2000 步对照：
+针对同一自主开发的数值模型，使用以下基准工况对 Taichi 与 Native CUDA 两种实现进行了 2000 步对照：
 
 - 网格：`200 × 200 × 200`
 - buffer：10
@@ -52,7 +52,7 @@ Native CUDA 版本已使用以下基准工况与原 Taichi 版本进行 2000 步
 | rho_min | 0.35655 | 0.35655 |
 | rho_max | 7.88907 | 7.88912 |
 
-主要状态量和通量的差异约为 `10^-4` 量级或更低，满足当前迁移验证要求。
+两种实现的主要状态量和通量结果接近，相对差异约为 `10^-4` 量级或更低。
 
 > 性能比较需要在相同 VTK、checkpoint 和统计输出条件下进行。开发阶段观察到 Native CUDA 显著快于 Taichi，但不应直接把不同 I/O 配置下的耗时作为严格加速比。
 
@@ -71,23 +71,22 @@ Native CUDA 版本已使用以下基准工况与原 Taichi 版本进行 2000 步
 
 仅支持 NVIDIA CUDA GPU。AMD Radeon、Intel Arc 或纯 CPU 环境不能运行当前 CUDA Release。
 
-## 4. 发布包
+## 4. 发布包与运行
 
-标准发布目录：
+`release/` 目录包含以下文件：
 
 ```text
 SoilEvaporationLBM.exe
 config.txt
 run.bat
+SoilEvaporationLBM_NonIsothermal.exe
+config_nonisothermal.txt
+run_nonisothermal.bat
 ```
 
-双击：
+等温计算：修改 `config.txt`，双击 `run.bat`。
 
-```text
-run.bat
-```
-
-即可按 `config.txt` 启动计算。
+非等温计算：修改 `config_nonisothermal.txt`，双击 `run_nonisothermal.bat`。
 
 ## 5. 等温配置文件（config.txt）
 
@@ -267,7 +266,7 @@ nx × ny × nz_geo
 
 个元素。
 
-当前数据按照与原 Python/NumPy 实现一致的 Fortran-order 解释：
+输入数据按 Fortran-order 排列：
 
 ```text
 flat_index = i + nx × (j + ny × k)
@@ -353,7 +352,7 @@ Native 版本使用二进制 checkpoint：
 
 为避免磁盘占用过大，仅保留最近 `keep_checkpoints` 个 checkpoint。
 
-Native `.bin` checkpoint 与原 Taichi `.npz` checkpoint 不互相兼容。
+Native CUDA 的 `.bin` checkpoint 与 Taichi 的 `.npz` checkpoint 格式不同，不能直接互换。
 
 ## 9. 结果归档与重复运行
 
@@ -382,18 +381,6 @@ Release 使用静态 MSVC runtime 和静态 CUDA runtime。
 
 GitHub Actions 会自动生成 Windows Release artifact。
 
-正式分发时不建议包含：
-
-```text
-.cpp
-.cu
-.cuh
-.pdb
-.obj
-.lib
-.ptx
-```
-
 ## 11. 注意事项
 
 1. `rho_l_eq` 和 `rho_g_eq` 应与当前 EOS、`Tr`、`G_int`、`beta_sc` 等参数的标定结果对应。
@@ -404,7 +391,7 @@ GitHub Actions 会自动生成 Windows Release artifact。
 
 ## 12. 等温版本当前状态
 
-当前 Native CUDA 迁移已完成核心数值验证，可用于后续正式批量计算和发布测试。
+当前 Native CUDA 等温版本已完成核心数值验证，可用于后续正式批量计算和发布测试。
 
 验证平台：
 
@@ -414,7 +401,7 @@ Compute Capability 8.9
 Windows x64
 ```
 
-核心求解结果已与原 Taichi 基准完成 2000 步对照。
+两种自主开发的实现已完成 2000 步基准算例对照。
 
 
 ## 13. 非等温版本（Non-Isothermal Native CUDA）
@@ -487,7 +474,7 @@ force=0
 pause_when_finished=1
 ```
 
-**重要**：上述 `[THERMAL]` 数值仅用于展示配置格式，**不是经数值标定的推荐物理参数**。正式计算前，必须核对原非等温模型采用的格子单位、热容、潜热、边界温度与热源输入，不能把摄氏温度直接填入 `T_*_ratio` 字段。等温配置中的 `Tr` 并不能替代非等温的温度场设置。
+**重要**：上述 `[THERMAL]` 数值仅用于展示配置格式，**不是经数值标定的推荐物理参数**。正式计算前，必须核对非等温模型采用的格子单位、热容、潜热、边界温度与热源输入，不能把摄氏温度直接填入 `T_*_ratio` 字段。等温配置中的 `Tr` 并不能替代非等温的温度场设置。
 
 ### 热学控制项
 
@@ -507,10 +494,5 @@ pause_when_finished=1
 
 非等温程序通过 `[PATHS]` 指定与等温程序相同格式的几何和初始相分布输入，使用 `nonisothermal_output_root` 保存独立结果。统计结果包含饱和度、质量损失、温度极值和均值、能量与热通量诊断等字段，并可输出包含温度场的 VTK 文件。
 
-非等温程序已在 GitHub Actions 上成功完成 Windows CUDA 编译，但**不能仅凭编译成功认定与原始非等温版本的数值结果完全一致**。用户应以经验证的物理参数及基准算例检查结果。
+非等温程序已在 GitHub Actions 上完成 Windows CUDA 编译。正式计算前，应采用经验证的物理参数和基准算例核查数值结果。
 
-## 14. 三天试用许可与发布说明
-
-等温和非等温 Windows 可执行程序均链接同一套试用期校验模块 `trial_guard.cpp`。更新后的版本从首次运行起按连续 **72 小时**限制使用，且在长时间计算期间持续检查许可状态。已存在的试用期记录不会因重新下载程序而重置。详细使用权限见仓库根目录 `LICENSE`。
-
-GitHub Actions 对两个版本分别编译，并可将新生成的 EXE 同步到 `release/`。不要将旧的构建产物与新许可代码混用；应检查发布 EXE 对应的构建记录。非等温程序的加密构建输入仅用于受控编译，不应直接公开明文源文件。
