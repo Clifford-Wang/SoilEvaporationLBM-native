@@ -1,10 +1,10 @@
 # SoilEvaporationLBM Native
 
-基于 **C++17 + CUDA** 的三维孔隙尺度等温蒸发 LBM 求解器。该版本由原 Taichi 实现迁移而来，保留原有物理模型和主要批处理逻辑，同时移除 Python/Taichi 运行时依赖，可直接以 Windows 原生 EXE 运行。
+基于 **C++17 + CUDA** 的三维孔隙尺度蒸发 LBM 程序，包含独立的**等温**与**非等温** Windows 原生 EXE。等温版本由原 Taichi 实现迁移而来；非等温版本在独立 CUDA 程序中增加温度场、热传输及潜热相关控制。运行不需要 Python/Taichi。非等温程序的明文源代码不在本仓库公开。
 
-> 当前仓库为私有开发仓库。对外使用时建议仅分发 `SoilEvaporationLBM.exe`、`config.txt`、`run.bat` 和所需输入数据，不分发源码、PDB、PTX 或其他构建产物。
+> 本仓库公开提供可执行程序及示例配置；非等温明文源码不公开。两个版本分别使用自己的 TXT 配置和 BAT 启动脚本。程序与文档适用仓库中的 **Three-Day Evaluation License（三天试用许可）**。
 
-## 1. 主要功能
+## 1. 等温版本主要功能
 
 求解器目前包含：
 
@@ -29,7 +29,7 @@
 
 程序运行时不需要安装 Python、Taichi、Visual Studio 或 CUDA Toolkit，但需要正常安装 NVIDIA 显卡驱动。
 
-## 2. 已完成的数值验证
+## 2. 等温版本已完成的数值验证
 
 Native CUDA 版本已使用以下基准工况与原 Taichi 版本进行 2000 步对照：
 
@@ -89,7 +89,7 @@ run.bat
 
 即可按 `config.txt` 启动计算。
 
-## 5. 配置文件
+## 5. 等温配置文件（config.txt）
 
 示例：
 
@@ -402,7 +402,7 @@ GitHub Actions 会自动生成 Windows Release artifact。
 4. VTK 输出可能产生大量磁盘 I/O。正式长时间计算时应合理设置 `vtk_interval`。
 5. 若用于严谨性能对比，应保证不同实现的 VTK、checkpoint、统计间隔完全一致。
 
-## 12. 当前状态
+## 12. 等温版本当前状态
 
 当前 Native CUDA 迁移已完成核心数值验证，可用于后续正式批量计算和发布测试。
 
@@ -415,3 +415,102 @@ Windows x64
 ```
 
 核心求解结果已与原 Taichi 基准完成 2000 步对照。
+
+
+## 13. 非等温版本（Non-Isothermal Native CUDA）
+
+非等温计算使用 `SoilEvaporationLBM_NonIsothermal.exe`，独立读取 `config_nonisothermal.txt`。不要将等温配置文件直接替代非等温配置文件：非等温程序需要额外设置热学参数。可在 `release/` 目录双击 `run_nonisothermal.bat` 启动。
+
+### 非等温配置结构
+
+```ini
+[PATHS]
+geometry_root=F:\LBM\connected_pores
+phase_file=F:\LBM\phase_200.txt
+nonisothermal_output_root=F:\LBM\result_nonisothermal
+output_root=F:\LBM\result_nonisothermal
+
+[SAMPLES]
+only=21
+exclude=
+
+[GRID]
+nx=200
+ny=200
+nz_geo=200
+n_buffer=10
+pore_value=0
+
+[PHYSICS]
+niu=0.20
+G_int=-1.0
+beta_sc=1.16
+rho_liq=6.498946
+rho_gas=0.379679
+rho_l_eq=6.498946
+rho_g_eq=0.379679
+rho_dry=0.37
+G_ads=-0.20
+
+[THERMAL]
+rhocv_s=1.0
+T_initial_ratio=0.86
+T_bottom_ratio=0.86
+T_surface_ratio=0.90
+enable_heater=0
+q_heat=0.0
+enable_latent=1
+latent_heat=1.0
+latent_relaxation=1.0
+interface_frac=0.5
+velocity_ref=1.0
+adv_correction=1
+use_transport_weight=1
+boundary_monotonic_guard=1
+fo_safety=0.25
+cfl_safety=0.25
+min_substeps=1
+max_substeps=64
+
+[RUN]
+total_steps=2000
+record_interval=100
+print_interval=100
+vtk_interval=100
+checkpoint_interval=1000
+save_vtk=1
+wait_seconds=3.0
+
+[CONTROL]
+console_mode=minimal
+force=0
+pause_when_finished=1
+```
+
+**重要**：上述 `[THERMAL]` 数值仅用于展示配置格式，**不是经数值标定的推荐物理参数**。正式计算前，必须核对原非等温模型采用的格子单位、热容、潜热、边界温度与热源输入，不能把摄氏温度直接填入 `T_*_ratio` 字段。等温配置中的 `Tr` 并不能替代非等温的温度场设置。
+
+### 热学控制项
+
+| 配置键 | 含义 |
+|---|---|
+| `rhocv_s` | 固相体积热容参数 |
+| `T_initial_ratio` | 初始温度比 |
+| `T_bottom_ratio` | 底部温度比 |
+| `T_surface_ratio` | 表面温度比 |
+| `enable_heater`, `q_heat` | 加热开关与热量输入 |
+| `enable_latent`, `latent_heat`, `latent_relaxation` | 潜热项开关及其控制参数 |
+| `interface_frac` | 界面识别相关阈值 |
+| `velocity_ref`, `adv_correction`, `use_transport_weight` | 热平流及输运权重控制 |
+| `boundary_monotonic_guard` | 边界温度限制控制 |
+| `fo_safety`, `cfl_safety` | 热扩散与平流稳定性系数 |
+| `min_substeps`, `max_substeps` | 热求解子步数范围 |
+
+非等温程序通过 `[PATHS]` 指定与等温程序相同格式的几何和初始相分布输入，使用 `nonisothermal_output_root` 保存独立结果。统计结果包含饱和度、质量损失、温度极值和均值、能量与热通量诊断等字段，并可输出包含温度场的 VTK 文件。
+
+非等温程序已在 GitHub Actions 上成功完成 Windows CUDA 编译，但**不能仅凭编译成功认定与原始非等温版本的数值结果完全一致**。用户应以经验证的物理参数及基准算例检查结果。
+
+## 14. 三天试用许可与发布说明
+
+等温和非等温 Windows 可执行程序均链接同一套试用期校验模块 `trial_guard.cpp`。更新后的版本从首次运行起按连续 **72 小时**限制使用，且在长时间计算期间持续检查许可状态。已存在的试用期记录不会因重新下载程序而重置。详细使用权限见仓库根目录 `LICENSE`。
+
+GitHub Actions 对两个版本分别编译，并可将新生成的 EXE 同步到 `release/`。不要将旧的构建产物与新许可代码混用；应检查发布 EXE 对应的构建记录。非等温程序的加密构建输入仅用于受控编译，不应直接公开明文源文件。
