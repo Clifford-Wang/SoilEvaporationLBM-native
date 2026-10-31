@@ -20,6 +20,7 @@
 #include <thread>
 #include <cstdio>
 #include "native_production.hpp"
+#include "trial_guard.hpp"
 
 namespace fs = std::filesystem;
 
@@ -229,6 +230,7 @@ static void write_signature(const fs::path& dir,const std::string& sig){fs::crea
 int main(int argc,char** argv){
     int pause_when_finished=0;
     try{
+        trial_guard::initialize_or_throw();
         fs::path cfg=(argc>1?utf8_path(argv[1]):utf8_path("config.txt"));cfg=fs::absolute(cfg);
         auto ini=Ini::load(cfg);pause_when_finished=ini.geti("CONTROL","pause_when_finished",1);
         const int nx=ini.geti("GRID","nx"),ny=ini.geti("GRID","ny"),nz_geo=ini.geti("GRID","nz_geo"),n_buffer=ini.geti("GRID","n_buffer"),pore_value=ini.geti("GRID","pore_value",0);
@@ -331,6 +333,10 @@ int main(int argc,char** argv){
         }
         if(pause_when_finished){if(verbose)std::cout<<"Press Enter to exit...";std::cin.get();}
         return failed?1:0;
+    }catch(const trial_guard::TrialViolation& e){
+        std::cerr<<e.what()<<"\n";
+        if(pause_when_finished)std::cin.get();
+        return 2;
     }catch(const std::exception& e){
         std::cerr<<"FAILED: "<<e.what()<<"\n";
         if(pause_when_finished)std::cin.get();
