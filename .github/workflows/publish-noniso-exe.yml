@@ -1,16 +1,14 @@
-name: Publish non-isothermal EXE
+name: Publish native CUDA executables
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - '.github/workflows/publish-noniso-exe.yml'
+  workflow_run:
+    workflows: ['Build Windows Native Release']
+    types: [completed]
   workflow_dispatch:
     inputs:
       run_id:
-        description: 'GitHub Actions build run ID containing the native EXE'
+        description: 'Successful 3-day Windows build run ID'
         required: true
-        default: '39036684380'
 
 permissions:
   actions: read
@@ -18,38 +16,52 @@ permissions:
 
 jobs:
   publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout current main
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Download previously built native executable
+      - name: Check that build uses three-day trial guard
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          MANUAL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$MANUAL_RUN" != "true" ]; then
+            git fetch origin "$SOURCE_SHA"
+            git show "$SOURCE_SHA:src/trial_guard.cpp" | grep -Fq 'K_TRIAL_SECONDS=3ull*24ull*60ull*60ull'
+          fi
+          grep -Fq 'K_TRIAL_SECONDS=3ull*24ull*60ull*60ull' src/trial_guard.cpp
+
+      - name: Download successful build artifact
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN: ${{ inputs.run_id || '39036684380' }}
+          SOURCE_RUN: ${{ inputs.run_id || github.event.workflow_run.id }}
         run: |
           set -euo pipefail
           gh run download "$SOURCE_RUN" --name SoilEvaporationLBM-native-release-candidate --dir build-output
+          test -s build-output/SoilEvaporationLBM.exe
           test -s build-output/SoilEvaporationLBM_NonIsothermal.exe
-          echo 'd8ba8d5d6e88ff3c61b3a0197a7bbeda4cef767d0061ed16bf9d2fa03a725181  build-output/SoilEvaporationLBM_NonIsothermal.exe' | sha256sum --check
 
-      - name: Commit executable with Clifford attribution
+      - name: Publish both three-day executables as Clifford
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release
+          cp build-output/SoilEvaporationLBM.exe release/SoilEvaporationLBM.exe
           cp build-output/SoilEvaporationLBM_NonIsothermal.exe release/SoilEvaporationLBM_NonIsothermal.exe
-          if git diff --no-index --quiet /dev/null release/SoilEvaporationLBM_NonIsothermal.exe; then
-            echo 'No executable to publish'
-            exit 0
-          fi
           git config user.name 'Clifford'
           git config user.email '167417015+Clifford-Wang@users.noreply.github.com'
-          git add release/SoilEvaporationLBM_NonIsothermal.exe
+          git add release/SoilEvaporationLBM.exe release/SoilEvaporationLBM_NonIsothermal.exe
           if git diff --cached --quiet; then
-            echo 'Executable already published'
+            echo 'Both executables already published'
             exit 0
           fi
-          git commit -m 'Publish non-isothermal native CUDA executable'
+          git commit -m 'Publish three-day isothermal and non-isothermal CUDA executables'
+          git pull --rebase origin main
           git push origin HEAD:main
