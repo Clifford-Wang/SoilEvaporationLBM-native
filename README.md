@@ -4,6 +4,12 @@
 
 两个版本分别提供独立的 TXT 配置文件和 BAT 启动脚本。
 
+## Representative visualization | 代表性模拟可视化
+
+[![Representative pore-scale evaporation visualization](media/representative_pore_scale_evaporation.gif)](media/representative_pore_scale_evaporation.mp4)
+
+三维孔隙尺度蒸发模拟的代表性可视化。点击上方动画可查看[原始 20 秒 MP4 视频](media/representative_pore_scale_evaporation.mp4)。
+
 ## 1. 等温版本主要功能
 
 求解器目前包含：
