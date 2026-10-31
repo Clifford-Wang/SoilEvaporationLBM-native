@@ -25,7 +25,7 @@ namespace {
 
 constexpr uint64_t K_MAGIC=0x314C4152544D424Cull; // "LBMTRAL1" encoded
 constexpr uint32_t K_VERSION=2;
-constexpr uint64_t K_TRIAL_SECONDS=5ull*24ull*60ull*60ull;
+constexpr uint64_t K_TRIAL_SECONDS=3ull*24ull*60ull*60ull;
 constexpr uint64_t K_ROLLBACK_TOLERANCE=300ull;
 constexpr uint64_t K_BUILD_CLOCK_TOLERANCE=24ull*60ull*60ull;
 constexpr uint32_t K_FLAG_EXPIRED=1u;
@@ -288,7 +288,7 @@ int persist_state(TrialState& s){
 std::string expired_message(){
     return std::string(
         "\nEvaluation period expired.\n\n"
-        "The 5-day evaluation license has expired.\n"
+        "The 3-day evaluation license has expired.\n"
         "For continued use, please contact:\n\n"
         "clifford220810@gmail.com\n");
 }
