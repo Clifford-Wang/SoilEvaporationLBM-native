@@ -8,13 +8,17 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 find_package(CUDAToolkit REQUIRED)
 
+string(TIMESTAMP SOIL_LBM_BUILD_UNIX "%s" UTC)
+
 add_executable(SoilEvaporationLBM
   src/main.cpp
   src/native_production.cu
+  src/trial_guard.cpp
 )
 
 target_include_directories(SoilEvaporationLBM PRIVATE include)
-target_link_libraries(SoilEvaporationLBM PRIVATE CUDA::cudart_static)
+target_compile_definitions(SoilEvaporationLBM PRIVATE SOIL_LBM_BUILD_UNIX=${SOIL_LBM_BUILD_UNIX})
+target_link_libraries(SoilEvaporationLBM PRIVATE CUDA::cudart_static advapi32 crypt32)
 set_property(TARGET SoilEvaporationLBM PROPERTY CUDA_RUNTIME_LIBRARY Static)
 # One binary for common NVIDIA workstation/laptop generations:
 # Turing RTX20 (75), Ampere A100/RTX30 (80/86), Ada RTX40 (89), Hopper (90), Blackwell RTX50 (120).
