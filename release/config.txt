@@ -1,0 +1,52 @@
+# SoilEvaporationLBM 配置文件
+# SoilEvaporationLBM Native CUDA 最终版配置文件
+
+[PATHS]
+geometry_root=F:\Paper\Pore-scale isothermal evaporation in tillage-shaped soil microstructures\本文所用图像\connected_pores
+phase_file="F:\Paper\Pore-scale isothermal evaporation in tillage-shaped soil microstructures\验证案例\phase_200.txt"
+output_root=F:\Paper\Pore-scale isothermal evaporation in tillage-shaped soil microstructures\验证案例\result
+geometry_pattern=**/*_connected_Z_THROUGH*.txt
+
+[SAMPLES]
+only=21
+exclude=
+
+[GRID]
+nx=200
+ny=200
+nz_geo=200
+n_buffer=10
+pore_value=0
+
+[PHYSICS]
+niu=0.20
+G_int=-1.0
+beta_sc=1.16
+Tr=0.86
+rho_liq=6.498946
+rho_gas=0.379679
+rho_l_eq=6.498946
+rho_g_eq=0.379679
+rho_dry=0.37
+G_ads=-0.20
+
+[RUN]
+total_steps=2000
+record_interval=100
+print_interval=100
+vtk_interval=100
+checkpoint_interval=1000
+keep_checkpoints=2
+save_vtk=1
+device_memory_fraction=0.86
+wait_seconds=3.0
+
+[CONTROL]
+# 控制台输出模式：
+# minimal = 只显示每个工况成功/失败及最终汇总
+# full    = 显示GPU、初始化、迭代、checkpoint等完整过程
+console_mode=minimal
+
+force=0
+dry_run=0
+pause_when_finished=1
