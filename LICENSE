@@ -1,0 +1,96 @@
+SoilEvaporationLBM Five-Day Evaluation License
+Version 1.0
+
+Copyright (c) 2026 Clifford-Wang. All rights reserved.
+
+1. Scope
+
+This repository and the software, source code, executable files, configuration files,
+documentation, and related materials contained in it (collectively, the "Software")
+are made publicly viewable for research demonstration and evaluation purposes.
+
+This is a source-available evaluation license. It is not an OSI-approved open-source
+license.
+
+2. Five-Day Evaluation Grant
+
+Subject to the terms below, the copyright holder ("Licensor") may grant an individual
+or organization a temporary, non-exclusive, non-transferable, revocable right to use
+the Software for evaluation, academic testing, and non-commercial research purposes.
+
+Each separate evaluation authorization is valid for five (5) consecutive calendar
+days only.
+
+The five-day period begins on the date specified by the Licensor when the evaluation
+authorization is issued. If no date is specified, the period begins on the first day
+the recipient downloads, runs, or otherwise uses the Software, whichever occurs first.
+
+A new five-day evaluation period requires a new authorization from the Licensor.
+Downloading, cloning, reinstalling, copying, modifying, or rebuilding the Software
+does not automatically create a new evaluation period.
+
+3. Permitted Activities During the Evaluation Period
+
+During a valid five-day evaluation period, the recipient may:
+
+a. inspect and study the source code;
+b. run the Software for evaluation and non-commercial academic/research testing;
+c. modify the Software locally for the same evaluation purpose; and
+d. create temporary local copies reasonably necessary for that evaluation.
+
+4. Restrictions
+
+Unless the Licensor gives separate written permission, the recipient may not:
+
+a. use the Software after the applicable five-day evaluation period expires;
+b. use the Software for commercial, production, paid-service, or revenue-generating purposes;
+c. redistribute, sublicense, sell, rent, lease, publish, mirror, or provide the Software
+   or modified versions to third parties;
+d. remove or alter copyright, attribution, or license notices;
+e. represent the Software or derivative works as independently licensed open-source software; or
+f. use the Software to provide a hosted service or shared computing service to third parties.
+
+5. Expiration
+
+When the five-day evaluation period expires, all rights granted under this license end
+automatically unless the Licensor provides a new authorization or a separate written
+license.
+
+The recipient must stop executing and using the Software after expiration. Local copies
+may be retained only for archival or source-review purposes if they are not executed,
+distributed, or otherwise used beyond what is permitted by applicable law.
+
+6. Research Outputs
+
+This license does not claim ownership of the recipient's independently created research
+data, figures, analyses, manuscripts, or other scholarly outputs produced during an
+authorized evaluation period.
+
+Any publication or public research output that materially relies on the Software should
+provide appropriate attribution to the project and its authors where academically
+appropriate.
+
+7. Ownership
+
+The Software is licensed, not sold. All rights not expressly granted in this license are
+reserved by the Licensor.
+
+8. No Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+PURPOSE, NON-INFRINGEMENT, ACCURACY, OR RELIABILITY.
+
+9. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSOR SHALL NOT BE LIABLE FOR
+ANY CLAIM, DAMAGES, DATA LOSS, COMPUTATIONAL LOSS, OR OTHER LIABILITY ARISING FROM OR
+RELATED TO THE SOFTWARE OR ITS USE.
+
+10. Separate Permission
+
+Commercial use, redistribution, long-term use, deployment, collaboration arrangements,
+or use beyond a five-day evaluation period requires separate permission from the
+Licensor.
+
+For permission, contact the repository owner through GitHub.
